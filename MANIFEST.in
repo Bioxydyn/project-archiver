@@ -1,0 +1,6 @@
+graft docubox
+global-exclude .DS_Store
+global-exclude __pycache__
+global-exclude *.pyc
+
+prune tests/
