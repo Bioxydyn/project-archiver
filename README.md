@@ -1,4 +1,4 @@
-# project-archiver
+# Bioxydyn Project Archiver
 A tool to archive projects held on a file system, compressing them into chunks which can then be uploaded into the cloud.
 
     ./archive -i /path/to/myProject -o /path/to/archive
