@@ -14,7 +14,7 @@ Will do the following:
     - `/path/to/archive/Chunks/00001/Chunk00001.zip`
 6. Read back the zip file and check it contains all expected files and their size is as expected from the full listing
     - `/path/to/archive/Chunks/00001/ChunkCheck.txt`
-7. Create `/path/to/archive/Complete.txt` (an empty file)
+7. Concat all `ChunkListing.txt` and compare to `FullListing.txt`, create `/path/to/archive/CompleteSuccess.txt` or `CompleteERROR.txt`
 
 Note: 
 
