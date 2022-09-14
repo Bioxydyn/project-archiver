@@ -156,6 +156,26 @@ def build_directory_tree(path: str, progress_callback: Optional[ProgressPrinter]
     )
 
 
+def get_all_files(directory_tree: DirectoryTree) -> List[FileMetadata]:
+    """
+    Get all files in a directory tree, recursively.
+    """
+    files = directory_tree.files
+    for sub_tree in directory_tree.directories:
+        files += get_all_files(sub_tree)
+    return files
+
+
+def get_all_directories(directory_tree: DirectoryTree) -> List[str]:
+    """
+    Get all directories in a directory tree, recursively.
+    """
+    directories = [directory_tree.absolute_path]
+    for sub_tree in directory_tree.directories:
+        directories += get_all_directories(sub_tree)
+    return directories
+
+
 def create_full_listing(directory_tree: DirectoryTree) -> str:
     """
     Create a full listing of a directory tree.

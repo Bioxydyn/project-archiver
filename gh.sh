@@ -12,3 +12,6 @@ mypy archiver
 mypy tests
 
 pytest tests
+
+coverage run -m pytest tests
+coverage html --omit=tests/*.py

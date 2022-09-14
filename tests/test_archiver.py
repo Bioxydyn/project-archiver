@@ -16,7 +16,12 @@ from archiver.archiver import (
     DirectoryMetadata,
     build_directory_tree,
     DirectoryTree,
-    create_full_listing
+    create_full_listing,
+    ChunkerSettings,
+    ProgressPrinter,
+    break_tree_into_chunks,
+    get_all_directories,
+    get_all_files
 )
 
 
@@ -164,6 +169,28 @@ class TestBuildDirectoryTree(unittest.TestCase):
             self.assertEqual(len(tree.directories[1].files), 0)
             self.assertEqual(len(tree.directories[2].directories), 2)
 
+    def test_build_dir_tree_progress(self) -> None:
+        with isolated_filesystem():
+            add_mock_files()
+            progress_printer = ProgressPrinter()
+            tree = build_directory_tree(".", progress_callback=progress_printer)
+            self.assertEqual(type(tree), DirectoryTree)
+            self.assertTrue(progress_printer._total_added_size > 0)
+
+    def test_get_all_files(self) -> None:
+        with isolated_filesystem():
+            add_mock_files()
+            tree = build_directory_tree(".")
+            files = get_all_files(tree)
+            self.assertEqual(len(files), 5)
+
+    def test_get_all_dirs(self) -> None:
+        with isolated_filesystem():
+            add_mock_files()
+            tree = build_directory_tree(".")
+            dirs = get_all_directories(tree)
+            self.assertEqual(len(dirs), 7)
+
 
 class TestCreateListing(unittest.TestCase):
     def test_create_listing(self) -> None:
@@ -180,9 +207,72 @@ class TestCreateListing(unittest.TestCase):
 {todays_date_str} 40 Bytes   ./dir_1_lvl_1/file_3.txt  40
 {todays_date_str} 80 Bytes   ./dir_1_lvl_1/dir_1_lvl_2/file_4.txt  80
 {todays_date_str} 120 Bytes  ./dir_1_lvl_1/dir_1_lvl_2/dir_1_lvl_3/file_5.txt  120"""
-            print("\n\n")
-            print(listing)
-            print("\n\n")
-            print(expected_str)
-            print("\n\n")
-            self.assertTrue(expected_str in listing)
+
+            self.assertIn(expected_str, listing)
+
+
+class TestChunkerSettings(unittest.TestCase):
+    def test_chunker_settings(self) -> None:
+
+        settings = ChunkerSettings()
+
+        settings.target_size_bytes = 10
+        settings.max_chunk_size_factor = 1.5
+        settings.min_chunk_size_factor = 0.5
+
+        self.assertEqual(settings.get_max_target_size_bytes(), 15)
+        self.assertEqual(settings.get_min_target_size_bytes(), 5)
+
+        str_settings = str(settings)
+
+        expected_settings = """ChunkerSettings are:
+        Target chunk size: 10 Bytes
+        Target max chunk size: 15 Bytes
+        Target min chunk size: 5 Bytes"""
+
+        self.assertIn(expected_settings, str_settings)
+
+
+class TestProgressPrinter(unittest.TestCase):
+    def test_progress_printer(self) -> None:
+        progress_printer = ProgressPrinter()
+
+        progress_printer.on_directory_tree_progress(
+            [
+                FileMetadata(path="test", absolute_path="test", size=10, last_modified=0.0),
+                FileMetadata(path="test2", absolute_path="test2", size=15, last_modified=0.0)
+            ],
+            [
+                DirectoryMetadata(path="test", absolute_path="test"),
+            ]
+        )
+
+        self.assertAlmostEqual(progress_printer._total_added_directories, 1)
+        self.assertAlmostEqual(progress_printer._total_added_files, 2)
+        self.assertAlmostEqual(progress_printer._total_added_size, 25)
+
+
+class TestChunker(unittest.TestCase):
+    def test_one_chunk(self) -> None:
+        with isolated_filesystem():
+            add_mock_files()
+            tree = build_directory_tree(".")
+            settings = ChunkerSettings()
+            settings.target_size_bytes = 100000
+            chunks = break_tree_into_chunks(tree, settings)
+            self.assertEqual(len(chunks), 1)
+            total_chunked_size = sum([c.total_size_bytes for c in chunks])
+            total_input_size = tree.total_size_bytes
+            self.assertEqual(total_chunked_size, total_input_size)
+
+    def test_many_chunks(self) -> None:
+        with isolated_filesystem():
+            add_mock_files()
+            tree = build_directory_tree(".")
+            settings = ChunkerSettings()
+            settings.target_size_bytes = 3
+            chunks = break_tree_into_chunks(tree, settings)
+            self.assertEqual(len(chunks), 4)
+            total_chunked_size = sum([c.total_size_bytes for c in chunks])
+            total_input_size = tree.total_size_bytes
+            self.assertEqual(total_chunked_size, total_input_size)
