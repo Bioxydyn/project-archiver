@@ -29,7 +29,8 @@ def get_extras_require() -> dict:
             "flake8-annotations",
             "setuptools",
             "pytest",
-            "mypy"
+            "mypy",
+            "coverage"
         ]
     }
 

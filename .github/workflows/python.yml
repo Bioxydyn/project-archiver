@@ -37,3 +37,19 @@ jobs:
     - name: Test with pytest
       run: |
         pytest -sv tests
+    - name: Generate coverage report
+      run: |
+        sudo apt-get install -y lcov
+        coverage run -m pytest -sv tests
+        coverage html --omit tests/*.py
+        coverage lcov
+        ls
+        # Coverage is no in htmlcov/
+    - name: Upload coverage report to coveralls
+      uses: coverallsapp/github-action@master
+      # if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        path-to-lcov: coverage.lcov
+
+
