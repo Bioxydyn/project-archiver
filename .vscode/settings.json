@@ -1,0 +1,23 @@
+{
+    "python.linting.flake8Enabled": true,
+    "python.linting.flake8Args": [
+        "--ignore=E203,W503,E203,W503,ANN101,ANN204,S101",
+        "--max-line-length=120",
+        "--verbose"
+    ],
+    "python.linting.pylintEnabled": false,
+    "python.linting.enabled": true,
+    "python.formatting.provider": "black",
+    "python.formatting.blackArgs": [
+        "--line-length",
+        "120",
+        "--target-version",
+        "py38",
+    ],
+    "[python]": {
+        "editor.rulers": [
+            120
+        ]
+    },
+    "python.pythonPath": "venv/bin/python"
+}

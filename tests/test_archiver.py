@@ -4,7 +4,7 @@ import os
 import tempfile
 from contextlib import contextmanager
 import datetime
-from typing import Optional
+from typing import Optional, Generator
 
 
 from archiver.archiver import (
@@ -19,7 +19,8 @@ from archiver.archiver import (
     create_full_listing
 )
 
-def add_mock_files():
+
+def add_mock_files() -> None:
     os.mkdir("dir_1_lvl_1")
     os.mkdir("dir_2_lvl_1")
     os.mkdir("dir_3_lvl_1")
@@ -29,28 +30,29 @@ def add_mock_files():
 
     with open("file_1.txt", "w") as f:
         f.write("!" * 1)
-    
+
     with open("file_2.txt", "w") as f:
         f.write("!" * 2)
 
     with open("dir_1_lvl_1/file_3.txt", "w") as f:
         f.write("test" * 10)
-    
+
     with open("dir_1_lvl_1/dir_1_lvl_2/file_4.txt", "w") as f:
         f.write("test" * 20)
-    
+
     with open("dir_1_lvl_1/dir_1_lvl_2/dir_1_lvl_3/file_5.txt", "w") as f:
         f.write("test" * 30)
 
+
 @contextmanager
-def isolated_filesystem(temp_path: Optional[str] = None):
+def isolated_filesystem(temp_path: Optional[str] = None) -> Generator:
     current_directory = os.getcwd()
 
     user_specified_path = temp_path is not None
 
     if not user_specified_path:
         temp_path = tempfile.mkdtemp()
-    
+
     assert type(temp_path) is str
 
     try:
@@ -66,7 +68,7 @@ def isolated_filesystem(temp_path: Optional[str] = None):
 
 class TestFormatLastModified(unittest.TestCase):
 
-    def test_format_last_modified(self):
+    def test_format_last_modified(self) -> None:
         timestamp = 1663067974.3103588
         expected = "2022-09-13"
         actual = format_last_modified_time(timestamp)
@@ -74,29 +76,29 @@ class TestFormatLastModified(unittest.TestCase):
 
 
 class TestFormatBytes(unittest.TestCase):
-    def test_zero(self):
+    def test_zero(self) -> None:
         self.assertEqual(bytes_to_human_padded(0).strip(), "0 Bytes")
-    
-    def test_one(self):
+
+    def test_one(self) -> None:
         self.assertEqual(bytes_to_human_padded(1).strip(), "1 Bytes")
-    
-    def test_many(self):
+
+    def test_many(self) -> None:
         self.assertEqual(bytes_to_human_padded(1020).strip(), "1,020 Bytes")
         self.assertEqual(bytes_to_human_padded(1025).strip(), "1.00 KB")
         self.assertEqual(bytes_to_human_padded(1024 * 1024).strip(), "1.00 MB")
-        self.assertEqual(bytes_to_human_padded(1.4 * 1024 * 1024).strip(), "1.40 MB")
+        self.assertEqual(bytes_to_human_padded(int(1.4 * 1024 * 1024)).strip(), "1.40 MB")
         self.assertEqual(bytes_to_human_padded(1024 * 1024 * 1024).strip(), "1.00 GB")
-        self.assertEqual(bytes_to_human_padded(1.4 * 1024 * 1024 * 1024).strip(), "1.40 GB")
+        self.assertEqual(bytes_to_human_padded(int(1.4 * 1024 * 1024 * 1024)).strip(), "1.40 GB")
         self.assertEqual(bytes_to_human_padded(1024 * 1024 * 1024 * 1024).strip(), "1.00 TB")
         self.assertEqual(bytes_to_human_padded(1024 * 1024 * 1024 * 1024 * 1024).strip(), "1,024.00 TB")
 
-    def test_negative(self):
+    def test_negative(self) -> None:
         with self.assertRaises(ValueError):
             bytes_to_human_padded(-1)
 
 
 class TestListFiles(unittest.TestCase):
-    def test_list_files(self):
+    def test_list_files(self) -> None:
         with isolated_filesystem():
             add_mock_files()
 
@@ -118,8 +120,7 @@ class TestListFiles(unittest.TestCase):
                 self.assertTrue(os.path.isfile(file.path))
                 self.assertTrue(os.path.isfile(file.absolute_path))
 
-
-    def test_list_files_subdir(self):
+    def test_list_files_subdir(self) -> None:
         with isolated_filesystem():
             add_mock_files()
 
@@ -135,7 +136,7 @@ class TestListFiles(unittest.TestCase):
 
 
 class TestListDirectories(unittest.TestCase):
-    def test_list_directories(self):
+    def test_list_directories(self) -> None:
         with isolated_filesystem():
             add_mock_files()
             dirs = list_all_directories(".")
@@ -146,7 +147,7 @@ class TestListDirectories(unittest.TestCase):
 
 
 class TestBuildDirectoryTree(unittest.TestCase):
-    def test_build_dir_tree_mock_data(self):
+    def test_build_dir_tree_mock_data(self) -> None:
         with isolated_filesystem():
             add_mock_files()
             tree = build_directory_tree(".")
@@ -154,15 +155,18 @@ class TestBuildDirectoryTree(unittest.TestCase):
             self.assertEqual(tree.path, ".")
             self.assertEqual(len(tree.files), 2)
             self.assertEqual(len(tree.directories), 3)
-            self.assertEqual(set(['dir_2_lvl_1', 'dir_1_lvl_1', 'dir_3_lvl_1']), set(tree.directories.keys()))
-            self.assertEqual(len(tree.directories['dir_1_lvl_1'].files), 1)
-            self.assertEqual(len(tree.directories['dir_2_lvl_1'].files), 0)
-            self.assertEqual(len(tree.directories['dir_3_lvl_1'].files), 0)
-            self.assertEqual(len(tree.directories['dir_1_lvl_1'].directories.keys()), 2)
+            self.assertEqual(
+                {'./dir_2_lvl_1', './dir_1_lvl_1', './dir_3_lvl_1'},
+                {d.path for d in tree.directories}
+            )
+            self.assertEqual(len(tree.directories[2].files), 1)
+            self.assertEqual(len(tree.directories[0].files), 0)
+            self.assertEqual(len(tree.directories[1].files), 0)
+            self.assertEqual(len(tree.directories[2].directories), 2)
 
 
 class TestCreateListing(unittest.TestCase):
-    def test_create_listing(self):
+    def test_create_listing(self) -> None:
         with isolated_filesystem():
             add_mock_files()
             tree = build_directory_tree(".")
@@ -176,4 +180,9 @@ class TestCreateListing(unittest.TestCase):
 {todays_date_str} 40 Bytes   ./dir_1_lvl_1/file_3.txt  40
 {todays_date_str} 80 Bytes   ./dir_1_lvl_1/dir_1_lvl_2/file_4.txt  80
 {todays_date_str} 120 Bytes  ./dir_1_lvl_1/dir_1_lvl_2/dir_1_lvl_3/file_5.txt  120"""
+            print("\n\n")
+            print(listing)
+            print("\n\n")
+            print(expected_str)
+            print("\n\n")
             self.assertTrue(expected_str in listing)

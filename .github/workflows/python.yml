@@ -28,12 +28,12 @@ jobs:
         flake8 archiver --exclude=*/cpp/*,*/external/*,.svn,CVS,.bzr,.hg,.git,__pycache__,.tox,.eggs,*.egg --count --select=E9,F63,F7,F82 --show-source --statistics
         flake8 tests --count --select=E9,F63,F7,F82 --show-source --statistics
 
-        flake8 archiver --exclude=*/cpp/*,*/external/*,.svn,CVS,.bzr,.hg,.git,__pycache__,.tox,.eggs,*.egg --count --max-complexity=60 --ignore=E203,W503,ANN101,ANN204 --max-line-length=120 --statistics
-        flake8 tests --count --max-complexity=60 --ignore=E203,W503,ANN101,ANN204 --max-line-length=120 --statistics
+        flake8 archiver --exclude=*/cpp/*,*/external/*,.svn,CVS,.bzr,.hg,.git,__pycache__,.tox,.eggs,*.egg --count --max-complexity=60 --ignore=E203,W503,ANN101,ANN204,S101 --max-line-length=120 --statistics
+        flake8 tests --count --max-complexity=60 --ignore=E203,W503,ANN101,ANN204,S101 --max-line-length=120 --statistics
     - name: Check static types with mypy
       run: |
         mypy archiver
         mypy tests
     - name: Test with pytest
       run: |
-        pytest tests
+        pytest -sv tests

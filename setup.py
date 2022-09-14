@@ -7,26 +7,26 @@ from setuptools import setup
 
 def get_install_requires() -> list:
     return [
-        ""
+        "setuptools"
     ]
 
 
 def get_extras_require() -> dict:
     return {
         "dev": [
-            "flake8==4.0.1",
-            "flake8-bugbear==21.9.2",
-            "flake8-builtins==1.5.3",
-            "flake8-fixme==1.1.1",
-            "flake8-walrus==1.1.0",
-            "flake8-return==1.1.3",
-            "flake8-printf-formatting==1.1.2",
-            "flake8-broken-line==0.4.0",
-            "flake8-comprehensions==3.10.0",
-            "flake8-eradicate==1.2.1",
-            "flake8-executable==2.1.1",
-            "flake8-bandit==3.0.0",
-            "flake8-annotations==2.7.0",
+            "flake8",
+            "flake8-bugbear",
+            "flake8-builtins",
+            "flake8-fixme",
+            "flake8-walrus",
+            "flake8-return",
+            "flake8-printf-formatting",
+            "flake8-broken-line",
+            "flake8-comprehensions",
+            "flake8-eradicate",
+            "flake8-executable",
+            "flake8-bandit",
+            "flake8-annotations",
             "setuptools",
             "pytest",
             "mypy"
