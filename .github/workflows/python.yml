@@ -33,6 +33,7 @@ jobs:
     - name: Check static types with mypy
       run: |
         mypy archiver
+        mypy tests
     - name: Test with pytest
       run: |
         pytest tests

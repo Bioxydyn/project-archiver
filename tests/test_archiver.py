@@ -4,6 +4,8 @@ import os
 import tempfile
 from contextlib import contextmanager
 import datetime
+from typing import Optional
+
 
 from archiver.archiver import (
     bytes_to_human_padded,
@@ -18,12 +20,12 @@ from archiver.archiver import (
 )
 
 def add_mock_files():
-    os.mkdir("folder_1_lvl_1")
-    os.mkdir("folder_2_lvl_1")
-    os.mkdir("folder_3_lvl_1")
-    os.mkdir("folder_1_lvl_1/folder_1_lvl_2")
-    os.mkdir("folder_1_lvl_1/folder_2_lvl_2")
-    os.mkdir("folder_1_lvl_1/folder_1_lvl_2/folder_1_lvl_3")
+    os.mkdir("dir_1_lvl_1")
+    os.mkdir("dir_2_lvl_1")
+    os.mkdir("dir_3_lvl_1")
+    os.mkdir("dir_1_lvl_1/dir_1_lvl_2")
+    os.mkdir("dir_1_lvl_1/dir_2_lvl_2")
+    os.mkdir("dir_1_lvl_1/dir_1_lvl_2/dir_1_lvl_3")
 
     with open("file_1.txt", "w") as f:
         f.write("!" * 1)
@@ -31,26 +33,25 @@ def add_mock_files():
     with open("file_2.txt", "w") as f:
         f.write("!" * 2)
 
-    with open("folder_1_lvl_1/file_3.txt", "w") as f:
+    with open("dir_1_lvl_1/file_3.txt", "w") as f:
         f.write("test" * 10)
     
-    with open("folder_1_lvl_1/folder_2_lvl_2/file_4.txt", "w") as f:
+    with open("dir_1_lvl_1/dir_1_lvl_2/file_4.txt", "w") as f:
         f.write("test" * 20)
     
-    with open("folder_1_lvl_1/folder_1_lvl_2/folder_1_lvl_3/file_5.txt", "w") as f:
+    with open("dir_1_lvl_1/dir_1_lvl_2/dir_1_lvl_3/file_5.txt", "w") as f:
         f.write("test" * 30)
 
 @contextmanager
-def isolated_filesystem(temp_path: str = None):
+def isolated_filesystem(temp_path: Optional[str] = None):
     current_directory = os.getcwd()
 
-    user_specified_path = False
-
-    if temp_path is not None:
-        user_specified_path = True
+    user_specified_path = temp_path is not None
 
     if not user_specified_path:
         temp_path = tempfile.mkdtemp()
+    
+    assert type(temp_path) is str
 
     try:
         os.chdir(temp_path)
@@ -122,14 +123,14 @@ class TestListFiles(unittest.TestCase):
         with isolated_filesystem():
             add_mock_files()
 
-            files = list_all_files("folder_1_lvl_1")
+            files = list_all_files("dir_1_lvl_1")
             self.assertEqual(len(files), 1)
 
             file_1 = [x for x in files if x.path == "file_3.txt"][0]
 
             self.assertEqual(type(file_1), FileMetadata)
             self.assertEqual(file_1.size, 40)
-            self.assertTrue(file_1.absolute_path.startswith("folder_1_lvl_1"))
+            self.assertTrue(file_1.absolute_path.startswith("dir_1_lvl_1"))
             self.assertTrue(os.path.isfile(file_1.absolute_path))
 
 
@@ -139,9 +140,9 @@ class TestListDirectories(unittest.TestCase):
             add_mock_files()
             dirs = list_all_directories(".")
             self.assertEqual(len(dirs), 3)
-            dirs_1 = [x for x in dirs if x.path == "folder_1_lvl_1"][0]
+            dirs_1 = [x for x in dirs if x.path == "dir_1_lvl_1"][0]
             self.assertEqual(type(dirs_1), DirectoryMetadata)
-            self.assertEqual(dirs_1.absolute_path, "./folder_1_lvl_1")
+            self.assertEqual(dirs_1.absolute_path, "./dir_1_lvl_1")
 
 
 class TestBuildDirectoryTree(unittest.TestCase):
@@ -153,11 +154,11 @@ class TestBuildDirectoryTree(unittest.TestCase):
             self.assertEqual(tree.path, ".")
             self.assertEqual(len(tree.files), 2)
             self.assertEqual(len(tree.directories), 3)
-            self.assertEqual(set(['folder_2_lvl_1', 'folder_1_lvl_1', 'folder_3_lvl_1']), set(tree.directories.keys()))
-            self.assertEqual(len(tree.directories['folder_1_lvl_1'].files), 1)
-            self.assertEqual(len(tree.directories['folder_2_lvl_1'].files), 0)
-            self.assertEqual(len(tree.directories['folder_3_lvl_1'].files), 0)
-            self.assertEqual(len(tree.directories['folder_1_lvl_1'].directories.keys()), 2)
+            self.assertEqual(set(['dir_2_lvl_1', 'dir_1_lvl_1', 'dir_3_lvl_1']), set(tree.directories.keys()))
+            self.assertEqual(len(tree.directories['dir_1_lvl_1'].files), 1)
+            self.assertEqual(len(tree.directories['dir_2_lvl_1'].files), 0)
+            self.assertEqual(len(tree.directories['dir_3_lvl_1'].files), 0)
+            self.assertEqual(len(tree.directories['dir_1_lvl_1'].directories.keys()), 2)
 
 
 class TestCreateListing(unittest.TestCase):
@@ -167,14 +168,12 @@ class TestCreateListing(unittest.TestCase):
             tree = build_directory_tree(".")
             print("\n\n")
             listing = create_full_listing(tree)
-            print("\n\n")
-            print(listing)
             todays_date_str = datetime.datetime.now().strftime("%Y-%m-%d")
             self.assertEqual(type(listing), str)
             expected_str = f"""
-{todays_date_str} - 1 Bytes    - file_1.txt
-{todays_date_str} - 2 Bytes    - file_2.txt
-    {todays_date_str} - 40 Bytes   - file_3.txt
-        {todays_date_str} - 80 Bytes   - file_4.txt
-            {todays_date_str} - 120 Bytes  - file_5.txt"""
+{todays_date_str} 1 Bytes    ./file_1.txt  1
+{todays_date_str} 2 Bytes    ./file_2.txt  2
+{todays_date_str} 40 Bytes   ./dir_1_lvl_1/file_3.txt  40
+{todays_date_str} 80 Bytes   ./dir_1_lvl_1/dir_1_lvl_2/file_4.txt  80
+{todays_date_str} 120 Bytes  ./dir_1_lvl_1/dir_1_lvl_2/dir_1_lvl_3/file_5.txt  120"""
             self.assertTrue(expected_str in listing)

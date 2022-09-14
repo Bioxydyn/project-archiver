@@ -1,5 +1,5 @@
 # Bioxydyn Project Archiver
-A tool to archive projects held on a file system, compressing them into chunks which can then be uploaded into the cloud.
+A tool to archive projects held on a file system, compressing them into chunks which can then be uploaded into the cloud. It has been designed to safely archive the data for the various TRISTAN deliverables, making it easy to transmit data collaborators or archive.
 
     ./archive -i /path/to/myProject -o /path/to/archive
 

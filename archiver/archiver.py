@@ -4,17 +4,30 @@ import os
 import time
 
 
-class ProgressPrinter:
-    def __init__(self):
-        self._total_added_files = 0
-        self._total_added_folders = 0
-        self._total_added_size = 0
+def bytes_to_human_padded(n_bytes: int) -> str:
+    if n_bytes < 0:
+        raise ValueError("n_bytes must be >= 0")
 
-    def on_build_directory_tree_progress(self, n_added_files: int, n_added_folders: int, n_added_size: int):
-        self._total_added_files += n_added_files
-        self._total_added_folders += n_added_folders
-        self._total_added_size += n_added_size
-        print(f"Added {self._total_added_files} files, {self._total_added_folders} folders, {self._total_added_size} bytes")
+    """
+    Convert bytes to a human-readable string. 
+    """
+    if n_bytes < 1024:
+        return f"{n_bytes:,} Bytes".ljust(10)
+    elif n_bytes < 1024 ** 2:
+        return f"{n_bytes / 1024:,.2f} KB".ljust(10)
+    elif n_bytes < 1024 ** 3:
+        return f"{n_bytes / 1024 ** 2:,.2f} MB".ljust(10)
+    elif n_bytes < 1024 ** 4:
+        return f"{n_bytes / 1024 ** 3:,.2f} GB".ljust(10)
+    else:
+        return f"{n_bytes / 1024 ** 4:,.2f} TB".ljust(10)
+
+
+def format_last_modified_time(last_modified: float) -> str:
+    """
+    Format a last modified time.
+    """
+    return time.strftime("%Y-%m-%d", time.localtime(last_modified))
 
 
 @dataclass
@@ -34,10 +47,49 @@ class DirectoryMetadata:
 @dataclass
 class DirectoryTree:
     files: List[FileMetadata]
-    total_file_size: int
+    total_size_bytes: int
     directories: Dict[str, "DirectoryTree"]
     path: str
     absolute_path: str
+
+
+@dataclass
+class ChunkerSettings:
+    target_size_bytes = 1024 * 1024 * 1024
+    max_chunk_size_factor = 1.5
+    min_chunk_size_factor = 0.5
+
+    def __repr__(self) -> str:
+        target_size_bytes_str = bytes_to_human_padded(self.target_size_bytes).strip()
+        max_chunk_size_bytes_str = bytes_to_human_padded(self.get_max_target_size_bytes()).strip()
+        min_chunk_size_bytes_str = bytes_to_human_padded(self.get_min_target_size_bytes()).strip()
+        return f"""
+        ChunkerSettings are:
+        Target chunk size: {target_size_bytes_str}
+        Target max chunk size: {max_chunk_size_bytes_str}
+        Target min chunk size: {min_chunk_size_bytes_str}
+
+        Note: Both min and max target sizes may be exceeded, the chunker will not split individual files into multiple chunks.
+        """
+
+    def get_max_target_size_bytes(self) -> int:
+        return int(self.target_size_bytes * self.max_chunk_size_factor)
+
+    def get_min_target_size_bytes(self) -> int:
+        return int(self.target_size_bytes * self.min_chunk_size_factor)
+
+
+class ProgressPrinter:
+    def __init__(self):
+        self._total_added_files = 0
+        self._total_added_directories = 0
+        self._total_added_size = 0
+
+    def on_build_directory_tree_progress(self, added_files: List[FileMetadata], added_directories: List[DirectoryMetadata]):
+        self._total_added_files += len(added_files)
+        self._total_added_directories += len(added_directories)
+        self._total_added_size += sum(f.size for f in added_files)
+        print(f"Added {self._total_added_files} files, {self._total_added_directories} directories, {self._total_added_size} bytes")
 
 
 def list_all_files(path: str) -> List[FileMetadata]:
@@ -73,47 +125,24 @@ def build_directory_tree(path: str, progress_callback: Optional[ProgressPrinter]
     """
     files = list_all_files(path)
     directories = list_all_directories(path)
-    total_file_size = sum(f.size for f in files)
     
     if progress_callback:
-        progress_callback.on_build_directory_tree_progress(len(files), len(directories), total_file_size)
+        progress_callback.on_build_directory_tree_progress(files, directories)
+
+    sub_trees = {
+        d.path: build_directory_tree(d.absolute_path, progress_callback)
+        for d in directories
+    }
+
+    total_size = sum(f.size for f in files) + sum(t.total_size_bytes for t in sub_trees.values())
 
     return DirectoryTree(
         files=files,
-        total_file_size=total_file_size,
-        directories={
-            d.path: build_directory_tree(d.absolute_path)
-            for d in directories
-        },
+        total_size_bytes=total_size,
+        directories=sub_trees,
         path=path,
         absolute_path=os.path.abspath(path)
     )
-
-
-def bytes_to_human_padded(n_bytes: int) -> str:
-    if n_bytes < 0:
-        raise ValueError("n_bytes must be >= 0")
-
-    """
-    Convert bytes to a human-readable string. 
-    """
-    if n_bytes < 1024:
-        return f"{n_bytes:,} Bytes".ljust(10)
-    elif n_bytes < 1024 ** 2:
-        return f"{n_bytes / 1024:,.2f} KB".ljust(10)
-    elif n_bytes < 1024 ** 3:
-        return f"{n_bytes / 1024 ** 2:,.2f} MB".ljust(10)
-    elif n_bytes < 1024 ** 4:
-        return f"{n_bytes / 1024 ** 3:,.2f} GB".ljust(10)
-    else:
-        return f"{n_bytes / 1024 ** 4:,.2f} TB".ljust(10)
-
-
-def format_last_modified_time(last_modified: float) -> str:
-    """
-    Format a last modified time.
-    """
-    return time.strftime("%Y-%m-%d", time.localtime(last_modified))
 
 
 def create_full_listing(directory_tree: DirectoryTree) -> str:
@@ -121,44 +150,133 @@ def create_full_listing(directory_tree: DirectoryTree) -> str:
     Create a full listing of a directory tree.
     """
 
-    total_size_bytes: int = 0
+    max_file_size_bytes: int = 0
     total_files: int = 0
 
     full_listing = ""
 
     # Recurve over the directory tree and print out the files and directories
-    def _recurse(directory_tree: DirectoryTree, indent: int = 0):
-        nonlocal total_size_bytes, total_files
+    def _recurse(directory_tree: DirectoryTree):
+        nonlocal total_files, max_file_size_bytes
         nonlocal full_listing
         total_files += len(directory_tree.files)
-        total_size_bytes += directory_tree.total_file_size
         for f in directory_tree.files:
             date_str = format_last_modified_time(f.last_modified)
-            full_listing += f"{indent * ' '}{date_str} - {bytes_to_human_padded(f.size)} - {f.path}\n"
+            full_listing += f"{date_str} {bytes_to_human_padded(f.size)} {f.absolute_path}  {f.size}\n"
+            if f.size > max_file_size_bytes:
+                max_file_size_bytes = f.size
         for d in directory_tree.directories.values():
-            _recurse(d, indent + 4)
+            _recurse(d)
 
     _recurse(directory_tree)
     
-    # Get the final folder of the path
-    folder_name = directory_tree.absolute_path.split(os.sep)[-1]
+    # Get the final directoy of the path
+    directoy_name = directory_tree.absolute_path.split(os.sep)[-1]
 
-    title = f"Directory Listing for: {folder_name}"
-    total_size_str = f"Total Size: { bytes_to_human_padded(total_size_bytes)}"
+    title = f"Directory Listing for: {directoy_name}"
+    total_size_str = f"Total Size: { bytes_to_human_padded(directory_tree.total_size_bytes)}"
     total_files_str = f"Total Files: {total_files:,}"
+    max_file_size_str = f"Max File Size: {bytes_to_human_padded(max_file_size_bytes)}"
     box_size = 100
     header = (
         "*" * box_size + "\n" +
         "*" + " " * (box_size - 2) + "*\n" + 
         "*" + title.center(box_size - 2) + "*\n" + 
         "*" + total_size_str.center(box_size - 2) + "*\n" + 
+        "*" + max_file_size_str.center(box_size - 2) + "*\n" + 
         "*" + total_files_str.center(box_size - 2) + "*\n" + 
         "*" + " " * (box_size - 2) + "*\n" +
         "*" * box_size + "\n\n"
         "Printed on: " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) + "\n\n"
-        "Running with input folder: " + directory_tree.absolute_path + "\n\n"
+        "Running with input directory: " + directory_tree.absolute_path + "\n\n"
     )
 
     print(header)
 
     return header + full_listing
+
+def break_tree_into_chunks(directory_tree: DirectoryTree, chunker_settings: ChunkerSettings) -> List[DirectoryTree]:
+    """
+    Break a directory tree into chunks.
+    """
+    def _fresh_chunk(directory_tree: DirectoryTree) -> DirectoryTree:
+        return DirectoryTree(
+            files=[],
+            total_size_bytes=0,
+            directories={},
+            path=directory_tree.path,
+            absolute_path=directory_tree.absolute_path
+        )
+
+    chunks: List[DirectoryTree] = []
+    current_chunk = _fresh_chunk(directory_tree)
+    chunks.append(current_chunk)
+
+    def _recurse(directory_tree: DirectoryTree):
+        nonlocal current_chunk
+        nonlocal chunks
+
+        # First iterate through the directories in order of smallest to biggest by size
+        ordered_dirs = directory_tree.directories.values()
+
+        for d in ordered_dirs:
+            if current_chunk.total_size_bytes + d.total_size_bytes > chunker_settings.get_max_target_size_bytes():
+                if current_chunk.total_size_bytes > chunker_settings.get_min_target_size_bytes():
+                    # Current chunk is finished, create a new chunk
+                    current_chunk = _fresh_chunk(directory_tree)
+                    chunks.append(current_chunk)
+
+                    if d.total_size_bytes > chunker_settings.get_max_target_size_bytes():
+                        # We need to split this directory up
+                        _recurse(d)
+                    else:
+                        # We add this directory to the new chunk
+                        current_chunk.directories[d.path] = d
+                        current_chunk.total_size_bytes += d.total_size_bytes
+                else:
+                    # Current chunk is too small, but we can't add any more directories to it because
+                    # each is too large to fit (we are iterating through directories ordered by size)
+                    # We need to split this directory
+                    _recurse(d)
+            else:
+                # When we add this directory, we don't exceed our target size. So we can either add it to
+                # the current chunk, or create a new chunk and add it to that.
+                if current_chunk.total_size_bytes > chunker_settings.target_size_bytes:
+                    current_chunk = _fresh_chunk(directory_tree)
+                    chunks.append(current_chunk)
+
+                current_chunk.directories[d.path] = d
+                current_chunk.total_size_bytes += d.total_size_bytes
+
+        for f in directory_tree.files:
+            if current_chunk.total_size_bytes + f.size > chunker_settings.get_max_target_size_bytes():
+                if current_chunk.total_size_bytes > chunker_settings.get_min_target_size_bytes():
+                    # Current chunk is finished, create a new chunk
+                    current_chunk = _fresh_chunk(directory_tree)
+                    chunks.append(current_chunk)
+                
+                    current_chunk.files.append(f)
+                    current_chunk.total_size_bytes += f.size
+                else:
+                    is_current_chunk_empty = current_chunk.total_size_bytes == 0
+                    is_file_greater_than_target = f.size > chunker_settings.target_size_bytes
+
+                    if is_file_greater_than_target and not is_current_chunk_empty:
+                        current_chunk = _fresh_chunk(directory_tree)
+                        chunks.append(current_chunk)
+
+                    current_chunk.files.append(f)
+                    current_chunk.total_size_bytes += f.size
+            else:
+                # When we add this file, we don't exceed our target size. So we can either add it to
+                # the current chunk, or create a new chunk and add it to that.
+                if current_chunk.total_size_bytes > chunker_settings.target_size_bytes:
+                    current_chunk = _fresh_chunk(directory_tree)
+                    chunks.append(current_chunk)
+
+                current_chunk.files.append(f)
+                current_chunk.total_size_bytes += f.size
+
+    _recurse(directory_tree)
+
+    return chunks
