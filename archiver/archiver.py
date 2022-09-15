@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple, Type
 import os
 import time
 import zipfile
@@ -8,25 +8,26 @@ import copy
 import argparse
 from .version import __version__
 from alive_progress import alive_bar  # type: ignore
+import boto3  # type: ignore
 
 
-def bytes_to_human_padded(n_bytes: int) -> str:
+def format_bytes(n_bytes: int) -> str:
+    """
+    Convert bytes to a human-readable string
+    """
     if n_bytes < 0:
         raise ValueError("n_bytes must be >= 0")
 
-    """
-    Convert bytes to a human-readable string.
-    """
     if n_bytes < 1024:
-        return f"{n_bytes:,} Bytes".ljust(10)
+        return f"{n_bytes:,} Bytes"
     elif n_bytes < 1024 ** 2:
-        return f"{n_bytes / 1024:,.2f} KB".ljust(10)
+        return f"{n_bytes / 1024:,.2f} KB"
     elif n_bytes < 1024 ** 3:
-        return f"{n_bytes / 1024 ** 2:,.2f} MB".ljust(10)
+        return f"{n_bytes / 1024 ** 2:,.2f} MB"
     elif n_bytes < 1024 ** 4:
-        return f"{n_bytes / 1024 ** 3:,.2f} GB".ljust(10)
+        return f"{n_bytes / 1024 ** 3:,.2f} GB"
     else:
-        return f"{n_bytes / 1024 ** 4:,.2f} TB".ljust(10)
+        return f"{n_bytes / 1024 ** 4:,.2f} TB"
 
 
 def format_last_modified_time(last_modified: float) -> str:
@@ -66,9 +67,9 @@ class ChunkerSettings:
     min_chunk_size_factor = 0.5
 
     def __repr__(self) -> str:
-        target_size_bytes_str = bytes_to_human_padded(self.target_size_bytes).strip()
-        max_chunk_size_bytes_str = bytes_to_human_padded(self.get_max_target_size_bytes()).strip()
-        min_chunk_size_bytes_str = bytes_to_human_padded(self.get_min_target_size_bytes()).strip()
+        target_size_bytes_str = format_bytes(self.target_size_bytes)
+        max_chunk_size_bytes_str = format_bytes(self.get_max_target_size_bytes())
+        min_chunk_size_bytes_str = format_bytes(self.get_min_target_size_bytes())
         return f"""
         ChunkerSettings are:
         Target chunk size: {target_size_bytes_str}
@@ -109,8 +110,8 @@ class ProgressPrinter:
             self._alive_bar(len(added_files))
         time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         msg = (
-            f"{time_str} Added {self._total_added_files} files, {self._total_added_directories} directories,"
-            f" {bytes_to_human_padded(self._total_added_size).strip()}"
+            f"{time_str} Added {self._total_added_files:,} files, {self._total_added_directories:,} directories,"
+            f" {format_bytes(self._total_added_size)}"
         )
 
         if self._verbose and int(time.time()) - self._last_update_time > 30:
@@ -206,9 +207,10 @@ def build_archive_path(input_directory: str, file: FileMetadata) -> str:
     return last_folder_of_input + file.absolute_path[len(input_directory):]
 
 
-def create_full_listing(directory_tree: DirectoryTree, input_directory: str, line_prefix: str = "") -> Tuple[str, str]:
+def build_full_listing(directory_tree: DirectoryTree, input_directory: str, line_prefix: str = "") -> Tuple[str, str]:
     """
-    Create a full listing of a directory tree.
+    Build a full listing of a directory tree which can be saved as a text file.
+    Returns a tuple of (listing_header, listing_body).
     """
 
     max_file_size_bytes: int = 0
@@ -224,7 +226,7 @@ def create_full_listing(directory_tree: DirectoryTree, input_directory: str, lin
         for f in directory_tree.files:
             date_str = format_last_modified_time(f.last_modified)
             archive_path = build_archive_path(input_directory, f)
-            full_listing += f"{line_prefix}{date_str} {bytes_to_human_padded(f.size)} {archive_path}  {f.size}\n"
+            full_listing += f"{line_prefix}{date_str} {format_bytes(f.size).ljust(10)} {archive_path}  {f.size}\n"
             if f.size > max_file_size_bytes:
                 max_file_size_bytes = f.size
         for d in directory_tree.directories:
@@ -235,9 +237,9 @@ def create_full_listing(directory_tree: DirectoryTree, input_directory: str, lin
     # Get the final directoy of the path
     directoy_name = directory_tree.absolute_path.split(os.sep)[-1]
     title = f"Directory Listing for: {directoy_name}"
-    total_size_str = f"Total Size: { bytes_to_human_padded(directory_tree.total_size_bytes)}"
+    total_size_str = f"Total Size: { format_bytes(directory_tree.total_size_bytes)}"
     total_files_str = f"Total Files: {total_files:,}"
-    max_file_size_str = f"Max File Size: {bytes_to_human_padded(max_file_size_bytes)}"
+    max_file_size_str = f"Max File Size: {format_bytes(max_file_size_bytes)}"
     box_size = 100
     header = (
         "*" * box_size + "\n"
@@ -255,7 +257,7 @@ def create_full_listing(directory_tree: DirectoryTree, input_directory: str, lin
     return header, full_listing
 
 
-def break_tree_into_chunks(directory_tree: DirectoryTree, chunker_settings: ChunkerSettings) -> List[DirectoryTree]:
+def divide_tree_into_chunks(directory_tree: DirectoryTree, chunker_settings: ChunkerSettings) -> List[DirectoryTree]:
     """
     Break a directory tree into chunks.
     """
@@ -363,7 +365,7 @@ def compress_chunk(chunk: DirectoryTree, chunk_number: int, output_directory: st
     if not os.path.exists(chunk_directory):
         os.makedirs(chunk_directory)
 
-    header, listing = create_full_listing(chunk, input_directory)
+    header, listing = build_full_listing(chunk, input_directory)
 
     zip_file_name = os.path.join(chunk_directory, f"Chunk{chunk_number:07d}.zip")
     listing_file_name = os.path.join(chunk_directory, f"Chunk{chunk_number:07d}Listing.txt")
@@ -381,7 +383,7 @@ def compress_chunk(chunk: DirectoryTree, chunk_number: int, output_directory: st
 
     input_files = get_all_files(chunk)
 
-    with zipfile.ZipFile(zip_file_name, "w", zipfile.ZIP_DEFLATED) as zip_file:
+    with zipfile.ZipFile(zip_file_name, "w", zipfile.ZIP_DEFLATED, compresslevel=7) as zip_file:
         for in_file in input_files:
             # To form the arcname, remove the input directory from the start file path
             zip_file.write(in_file.absolute_path, arcname=build_archive_path(input_directory, in_file))
@@ -392,7 +394,7 @@ def compress_chunk(chunk: DirectoryTree, chunk_number: int, output_directory: st
     # Create the check file. Load the zip file from disk, and read all of the files. Check that every file in the
     # input is present, and the size of each file is correct.
     try:
-        check_msg = check_chunk(chunk, zip_file_name, input_directory)
+        check_msg = verify_chunk(chunk, zip_file_name, input_directory)
         with open(check_file_name, "w") as f:
             f.write(check_msg)
     except Exception as e:
@@ -401,7 +403,7 @@ def compress_chunk(chunk: DirectoryTree, chunk_number: int, output_directory: st
         raise e
 
 
-def check_chunk(chunk: DirectoryTree, zip_file_name: str, input_directory: str) -> str:
+def verify_chunk(chunk: DirectoryTree, zip_file_name: str, input_directory: str) -> str:
     check_output: str = ""
     all_input_files: List[FileMetadata] = get_all_files(chunk)
 
@@ -424,16 +426,16 @@ def check_chunk(chunk: DirectoryTree, zip_file_name: str, input_directory: str) 
             total_size += file_in_zip.file_size
 
         if total_size != chunk.total_size_bytes:
-            size_zip_str = bytes_to_human_padded(total_size).strip()
-            size_input_str = bytes_to_human_padded(chunk.total_size_bytes).strip()
+            size_zip_str = format_bytes(total_size)
+            size_input_str = format_bytes(chunk.total_size_bytes)
             raise RuntimeError(
                 f"Total size of files in zip file {zip_file_name} ({size_zip_str}) does not match total size of files"
                 f" in input chunk ({size_input_str})."
             )
 
-        check_output += f"Total size of files in zip file: {bytes_to_human_padded(total_size).strip()} ({total_size:,}"
+        check_output += f"Total size of files in zip file: {format_bytes(total_size)} ({total_size:,}"
         check_output += " bytes).\n"
-        check_output += f"Total size of files in input chunk:  {bytes_to_human_padded(chunk.total_size_bytes).strip()}"
+        check_output += f"Total size of files in input chunk:  {format_bytes(chunk.total_size_bytes)}"
         check_output += f" ({chunk.total_size_bytes:,} bytes).\n\n"
 
         # Check that each file in the input is present in the zip file
@@ -441,13 +443,11 @@ def check_chunk(chunk: DirectoryTree, zip_file_name: str, input_directory: str) 
         for file_in_input in all_input_files:
             arcname = build_archive_path(input_directory, file_in_input)
             if arcname not in input_files_dict:
-                for file in input_files_dict.keys():
-                    print(file)
                 raise RuntimeError(f"File {arcname} is not present in zip file {zip_file_name}.")
 
             if file_in_input.size != input_files_dict[arcname]:
-                size_in_zip_str = bytes_to_human_padded(input_files_dict[arcname]).strip()
-                size_in_input_str = bytes_to_human_padded(file_in_input.size).strip()
+                size_in_zip_str = format_bytes(input_files_dict[arcname])
+                size_in_input_str = format_bytes(file_in_input.size)
                 raise RuntimeError(
                     f"File {arcname} has a different size in zip file ({size_in_zip_str}) than in"
                     f" the input chunk ({size_in_input_str})."
@@ -460,14 +460,14 @@ def check_chunk(chunk: DirectoryTree, zip_file_name: str, input_directory: str) 
     return check_output
 
 
-def create_chunk_dictionary(chunks: List[DirectoryTree], input_directory: str) -> str:
+def build_chunk_dictionary(chunks: List[DirectoryTree], input_directory: str) -> str:
     """
     Produce a dictionary of all files in the chunks.
     """
     chunk_dictionary: str = ""
     for idx, chunk in enumerate(chunks):
         line_prefix = f"Chunk {idx:07d}: "
-        _, chunk_listing = create_full_listing(chunk, input_directory=input_directory, line_prefix=line_prefix)
+        _, chunk_listing = build_full_listing(chunk, input_directory=input_directory, line_prefix=line_prefix)
         chunk_dictionary += chunk_listing
         chunk_dictionary += "\n\n\n"
     return chunk_dictionary
@@ -479,6 +479,8 @@ class ArchiveRunner:
         self._chunker_settings = ChunkerSettings()
         self._input_directory: Optional[str] = None
         self._output_directory: Optional[str] = None
+        self._upload = False
+        self._verbose = False
 
     def parse_arguments(self, args: List[str]) -> None:
         """
@@ -492,11 +494,21 @@ class ArchiveRunner:
         parser.add_argument("--input-dir", type=str, required=True, help="Path to the input directory.")
         parser.add_argument("--output-dir", type=str, required=True, help="Path to the output directory.")
         parser.add_argument("--version", action="version", version=f"Project Archiver {__version__}")
+        parser.add_argument(
+            "--upload",
+            action="store_true",
+            default=False,
+            help=(
+                "Upload the archive to an S3 compatible server. Note, this requires the environment variables"
+                " ARCHIVER_S3_ACCESS_KEY, ARCHIVER_S3_SECRET_KEY, ARCHIVER_S3_BUCKET_NAME and ARCHIVER_S3_ENDPOINT_URL"
+                " to be set."
+            )
+        )
         parser.add_argument("--verbose", action="store_true", help="Enable verbose output.")
         default_chunk_size_mb = int(self._chunker_settings.target_size_bytes / 1024 / 1024)
         parser.add_argument(
             "--target-chunk-size-mb",
-            type=int,
+            type=float,
             default=default_chunk_size_mb,
             help=f"Target size of each chunk in MB. Default is {default_chunk_size_mb} MB.",
         )
@@ -505,10 +517,52 @@ class ArchiveRunner:
 
         self._input_directory = parsed_args.input_dir
         self._output_directory = parsed_args.output_dir
-        self._chunker_settings.target_size_bytes = parsed_args.target_chunk_size_mb * 1024 * 1024
+        self._chunker_settings.target_size_bytes = int(parsed_args.target_chunk_size_mb * 1024 * 1024)
         self._verbose = parsed_args.verbose
+        self._upload = parsed_args.upload
 
-    def run(self) -> None:
+        if self._chunker_settings.target_size_bytes < 1:
+            raise ValueError("Target chunk size must be at least 1 B.")
+
+    @staticmethod
+    def _get_s3_bucket(boto_session_cls: Type[boto3.Session]):  # noqa
+        access_key = os.environ.get("ARCHIVER_S3_ACCESS_KEY", "")
+        secret_key = os.environ.get("ARCHIVER_S3_SECRET_KEY", "")
+        name = os.environ.get("ARCHIVER_S3_BUCKET_NAME", "")
+        endpoint_url = os.environ.get("ARCHIVER_S3_ENDPOINT_URL", "")
+
+        if type(access_key) is not str or len(access_key) == 0:
+            raise RuntimeError("ARCHIVER_S3_ACCESS_KEY must be a string.")
+
+        if type(secret_key) is not str or len(secret_key) == 0:
+            raise RuntimeError("ARCHIVER_S3_SECRET_KEY must be a string.")
+
+        if type(name) is not str or len(name) == 0:
+            raise RuntimeError("ARCHIVER_S3_BUCKET_NAME must be a string.")
+
+        if type(endpoint_url) is not str or len(endpoint_url) == 0:
+            raise RuntimeError("ARCHIVER_S3_ENDPOINT_URL must be a string.")
+
+        session = boto_session_cls(
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+        )
+
+        s3 = session.resource(
+            service_name="s3",
+            endpoint_url=endpoint_url,
+        )
+
+        return s3.Bucket(name)
+
+    def run(self, boto_session_cls: Optional[Type[boto3.Session]] = None) -> None:
+        if self._upload:
+            # Check we can build the bucket object: We don't want to fail after the chunking is done because the
+            # user forgot to set the environment variables.
+            if boto_session_cls is None:
+                boto_session_cls = boto3.Session
+            self._get_s3_bucket(boto_session_cls)
+
         progress_printer = ProgressPrinter(self._verbose)
 
         assert type(self._input_directory) is str
@@ -532,33 +586,77 @@ class ArchiveRunner:
             raise RuntimeError(f"Output directory {self._output_directory} is not empty.")
 
         # Create initial directory tree
-        with alive_bar(title_length=25, title="Scanning input dir", total=0) as bar:
+        with alive_bar(title_length=27, title="Scanning input dir", total=0) as bar:
             progress_printer.set_alive_bar(bar)
             input_tree = build_directory_tree(self._input_directory, progress_printer)
 
+        header, content = build_full_listing(input_tree, self._input_directory)
+        print(f"\n{header}\n")
+
         # Create chunks
-        with alive_bar(title_length=25, title="Deciding on chunks", total=0) as bar:
+        with alive_bar(title_length=27, title="Deciding on chunks", total=0) as bar:
             progress_printer.set_alive_bar(bar)
-            chunks = break_tree_into_chunks(input_tree, self._chunker_settings)
+            chunks = divide_tree_into_chunks(input_tree, self._chunker_settings)
 
         # Save compressed chunks to disk
-        with alive_bar(title_length=25, title="Saving chunks", total=len(chunks)) as bar:
+        with alive_bar(title_length=27, title="Saving & verifying chunks", total=len(chunks)) as bar:
             progress_printer.set_alive_bar(bar)
             for idx, chunk in enumerate(chunks):
                 compress_chunk(chunk, idx, self._output_directory, self._input_directory)
                 bar(idx / len(chunks))
 
         # Create dictionary of all files in chunks
-        with alive_bar(title_length=25, title="Creating ChunkDictionary.txt", total=0) as bar:
+        with alive_bar(title_length=27, title="Creating ChunkDictionary.txt", total=0) as bar:
             progress_printer.set_alive_bar(bar)
-            chunk_dictionary = create_chunk_dictionary(chunks, self._input_directory)
+            chunk_dictionary = build_chunk_dictionary(chunks, self._input_directory)
             with open(os.path.join(self._output_directory, "ChunkDictionary.txt"), "w") as f:
                 f.write(chunk_dictionary)
 
         # Create the full listing
-        with alive_bar(title_length=25, title="Creating FullListing.txt", total=0) as bar:
+        with alive_bar(title_length=27, title="Creating FullListing.txt", total=0) as bar:
             progress_printer.set_alive_bar(bar)
-            header, content = create_full_listing(input_tree, self._input_directory)
             with open(os.path.join(self._output_directory, "FullListing.txt"), "w") as f:
                 f.write(header)
                 f.write(content)
+
+        # Upload data to S3-compatible storage
+        if self._upload:
+            if boto_session_cls is None:
+                boto_session_cls = boto3.Session
+            bucket = self._get_s3_bucket(boto_session_cls)
+            # Get the last folder of the input directory to use as the prefix for all S3 blobs
+            input_dir_name = self._input_directory.split("/")[-1]
+            chunk_directory = self._output_directory + "/Chunks"
+
+            with alive_bar(title_length=27, title="Uploading data", total=len(chunks)) as bar:
+                progress_printer.set_alive_bar(bar)
+
+                for chunk_number, _ in enumerate(chunks):
+                    bucket.upload_file(
+                        os.path.join(chunk_directory, f"Chunk{chunk_number:07d}.zip"),
+                        os.path.join(input_dir_name, f"Chunks/Chunk{chunk_number:07d}.zip")
+                    )
+                    bucket.upload_file(
+                        os.path.join(chunk_directory, f"Chunk{chunk_number:07d}Listing.txt"),
+                        os.path.join(input_dir_name, f"Chunks/Chunk{chunk_number:07d}Listing.txt")
+                    )
+                    bucket.upload_file(
+                        os.path.join(chunk_directory, f"Chunk{chunk_number:07d}Check.txt"),
+                        os.path.join(input_dir_name, f"Chunks/Chunk{chunk_number:07d}Check.txt")
+                    )
+                    bucket.upload_file(
+                        os.path.join(chunk_directory, f"Chunk{chunk_number:07d}Hash.txt"),
+                        os.path.join(input_dir_name, f"Chunks/Chunk{chunk_number:07d}Hash.txt")
+                    )
+
+                    bar(idx / len(chunks))
+
+            # Upload the full listing and chunk dictionary
+            bucket.upload_file(
+                os.path.join(self._output_directory, "FullListing.txt"),
+                os.path.join(input_dir_name, "FullListing.txt")
+            )
+            bucket.upload_file(
+                os.path.join(self._output_directory, "ChunkDictionary.txt"),
+                os.path.join(input_dir_name, "ChunkDictionary.txt")
+            )

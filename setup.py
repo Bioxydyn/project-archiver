@@ -7,7 +7,10 @@ from setuptools import setup
 
 def get_install_requires() -> list:
     return [
-        "setuptools"
+        "setuptools",
+        "alive-progress",
+        "wheel",
+        "boto3"
     ]
 
 

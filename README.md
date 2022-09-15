@@ -2,6 +2,8 @@
 
 [![Coverage Status](https://coveralls.io/repos/github/Bioxydyn/project-archiver/badge.svg?branch=main)](https://coveralls.io/github/Bioxydyn/project-archiver?branch=main)
 
+    pip3 install git+https://github.com/Bioxydyn/project-archiver.git@main
+
 A tool to archive projects held on a file system, compressing them into chunks which can then be uploaded into the cloud. It has been designed to safely archive the data for the various TRISTAN deliverables, making it easy to transmit data collaborators or archive.
 
     ./archive -i /path/to/myProject -o /path/to/archive
@@ -27,4 +29,10 @@ Note:
 - Chunk strategy:
    - Prefer to split at a top level
    - Try to avoid splitting files that exist within the same directory
-   - Print a warning if chunks are > target * 1.5 or < target * 0.5
+   - Print a warning if chunks are > target * 1.5
+
+    (venv) matthew@server-03:~$ tmux attach
+    (venv) matthew@server-03:~$ sudo su
+    (venv) matthew@server-03:~$ mkdir -p /mnt/TRI-16-17
+    (venv) matthew@server-03:~$ mount -t cifs -o ro,noload username=matthew.heaton //192.168.50.211/TRI-16-17 /mnt/TRI-16-17
+    (venv )matthew@server-03:~$ archiver --input-dir /mnt/HAM-17-01/ --output-dir /mnt/md0/HAM-17-01/ --verbose --target-chunk-size-mb 1024 --upload

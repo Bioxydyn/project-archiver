@@ -5,13 +5,13 @@ import os
 import tempfile
 from contextlib import contextmanager
 import datetime
-from typing import Optional, Generator
+from typing import Optional, Generator, Dict
 import random
 import zipfile
 
 
 from archiver.archiver import (
-    bytes_to_human_padded,
+    format_bytes,
     format_last_modified_time,
     list_all_files,
     FileMetadata,
@@ -19,16 +19,16 @@ from archiver.archiver import (
     DirectoryMetadata,
     build_directory_tree,
     DirectoryTree,
-    create_full_listing,
+    build_full_listing,
     ChunkerSettings,
     ProgressPrinter,
-    break_tree_into_chunks,
+    divide_tree_into_chunks,
     get_all_directories,
     get_all_files,
     get_sha_sum,
     compress_chunk,
-    check_chunk,
-    create_chunk_dictionary,
+    verify_chunk,
+    build_chunk_dictionary,
     ArchiveRunner
 )
 
@@ -47,7 +47,7 @@ def add_mock_files() -> None:
     with open("file_2.txt", "w") as f:
         f.write("!" * 2)
 
-    with open("dir_1_lvl_1/file_3.txt", "w") as f:
+    with open("dir_1_lvl_1/.file_3.txt", "w") as f:
         f.write("test" * 10)
 
     with open("dir_1_lvl_1/dir_1_lvl_2/file_4.txt", "w") as f:
@@ -109,6 +109,54 @@ def isolated_filesystem(temp_path: Optional[str] = None) -> Generator:
             shutil.rmtree(temp_path)
 
 
+global_objects_added = {}
+
+
+class MockBoto3Bucket:
+    """
+    Mocks a boto3 bucket for testing.
+    """
+    def __init__(self, name: str):
+        self.name = name
+        self.objects: Dict[str, str] = {}
+
+    def upload_file(self, filename: str, key: str) -> None:
+        global global_objects_added
+        self.objects[key] = filename
+        global_objects_added[key] = filename
+
+
+class MockBoto3Resource:
+    """
+    A mock boto3 resource for testing.
+    """
+    def __init__(self, service_name: str, endpoint_url: str):
+        self.service_name = service_name
+        self.endpoint_url = endpoint_url
+        self.buckets: Dict[str, MockBoto3Bucket] = {}
+
+    def Bucket(self, name: str) -> MockBoto3Bucket:
+        self.name = name
+        self.buckets[name] = MockBoto3Bucket(name)
+        return self.buckets[name]
+
+
+class MockBoto3Session:
+    """
+    A mock boto3 session for testing.
+    """
+    def __init__(self, aws_access_key_id: str, aws_secret_access_key: str):
+        self.aws_access_key_id = aws_access_key_id
+        self.aws_secret_access_key = aws_secret_access_key
+        self.resources: Dict[str, MockBoto3Resource] = {}
+
+    def resource(self, service_name: str, endpoint_url: str) -> MockBoto3Resource:
+        self.service_name = service_name
+        self.endpoint_url = endpoint_url
+        self.resources[self.service_name] = MockBoto3Resource(service_name, endpoint_url)
+        return self.resources[self.service_name]
+
+
 class TestFormatLastModified(unittest.TestCase):
 
     def test_format_last_modified(self) -> None:
@@ -120,24 +168,24 @@ class TestFormatLastModified(unittest.TestCase):
 
 class TestFormatBytes(unittest.TestCase):
     def test_zero(self) -> None:
-        self.assertEqual(bytes_to_human_padded(0).strip(), "0 Bytes")
+        self.assertEqual(format_bytes(0).strip(), "0 Bytes")
 
     def test_one(self) -> None:
-        self.assertEqual(bytes_to_human_padded(1).strip(), "1 Bytes")
+        self.assertEqual(format_bytes(1).strip(), "1 Bytes")
 
     def test_many(self) -> None:
-        self.assertEqual(bytes_to_human_padded(1020).strip(), "1,020 Bytes")
-        self.assertEqual(bytes_to_human_padded(1025).strip(), "1.00 KB")
-        self.assertEqual(bytes_to_human_padded(1024 * 1024).strip(), "1.00 MB")
-        self.assertEqual(bytes_to_human_padded(int(1.4 * 1024 * 1024)).strip(), "1.40 MB")
-        self.assertEqual(bytes_to_human_padded(1024 * 1024 * 1024).strip(), "1.00 GB")
-        self.assertEqual(bytes_to_human_padded(int(1.4 * 1024 * 1024 * 1024)).strip(), "1.40 GB")
-        self.assertEqual(bytes_to_human_padded(1024 * 1024 * 1024 * 1024).strip(), "1.00 TB")
-        self.assertEqual(bytes_to_human_padded(1024 * 1024 * 1024 * 1024 * 1024).strip(), "1,024.00 TB")
+        self.assertEqual(format_bytes(1020).strip(), "1,020 Bytes")
+        self.assertEqual(format_bytes(1025).strip(), "1.00 KB")
+        self.assertEqual(format_bytes(1024 * 1024).strip(), "1.00 MB")
+        self.assertEqual(format_bytes(int(1.4 * 1024 * 1024)).strip(), "1.40 MB")
+        self.assertEqual(format_bytes(1024 * 1024 * 1024).strip(), "1.00 GB")
+        self.assertEqual(format_bytes(int(1.4 * 1024 * 1024 * 1024)).strip(), "1.40 GB")
+        self.assertEqual(format_bytes(1024 * 1024 * 1024 * 1024).strip(), "1.00 TB")
+        self.assertEqual(format_bytes(1024 * 1024 * 1024 * 1024 * 1024).strip(), "1,024.00 TB")
 
     def test_negative(self) -> None:
         with self.assertRaises(ValueError):
-            bytes_to_human_padded(-1)
+            format_bytes(-1)
 
 
 class TestListFiles(unittest.TestCase):
@@ -170,7 +218,7 @@ class TestListFiles(unittest.TestCase):
             files = list_all_files("dir_1_lvl_1")
             self.assertEqual(len(files), 1)
 
-            file_1 = [x for x in files if x.path == "file_3.txt"][0]
+            file_1 = [x for x in files if x.path == ".file_3.txt"][0]
 
             self.assertEqual(type(file_1), FileMetadata)
             self.assertEqual(file_1.size, 40)
@@ -245,13 +293,13 @@ class TestCreateListing(unittest.TestCase):
         with isolated_filesystem():
             add_mock_files()
             tree = build_directory_tree(".")
-            header, listing = create_full_listing(tree, ".")
+            header, listing = build_full_listing(tree, ".")
             todays_date_str = datetime.datetime.now().strftime("%Y-%m-%d")
             self.assertEqual(type(listing), str)
             expected_str = f"""
 {todays_date_str} 1 Bytes    ./file_1.txt  1
 {todays_date_str} 2 Bytes    ./file_2.txt  2
-{todays_date_str} 40 Bytes   ./dir_1_lvl_1/file_3.txt  40
+{todays_date_str} 40 Bytes   ./dir_1_lvl_1/.file_3.txt  40
 {todays_date_str} 80 Bytes   ./dir_1_lvl_1/dir_1_lvl_2/file_4.txt  80
 {todays_date_str} 120 Bytes  ./dir_1_lvl_1/dir_1_lvl_2/dir_1_lvl_3/file_5.txt  120""".strip()
 
@@ -316,7 +364,7 @@ class TestChunker(unittest.TestCase):
             tree = build_directory_tree(".")
             settings = ChunkerSettings()
             settings.target_size_bytes = 100000
-            chunks = break_tree_into_chunks(tree, settings)
+            chunks = divide_tree_into_chunks(tree, settings)
             self.assertEqual(len(chunks), 1)
             total_chunked_size = sum([c.total_size_bytes for c in chunks])
             total_input_size = tree.total_size_bytes
@@ -328,7 +376,7 @@ class TestChunker(unittest.TestCase):
             tree = build_directory_tree(".")
             settings = ChunkerSettings()
             settings.target_size_bytes = 3
-            chunks = break_tree_into_chunks(tree, settings)
+            chunks = divide_tree_into_chunks(tree, settings)
             self.assertEqual(len(chunks), 4)
             total_chunked_size = sum([c.total_size_bytes for c in chunks])
             total_input_size = tree.total_size_bytes
@@ -339,7 +387,7 @@ class TestChunker(unittest.TestCase):
                 "['./dir_1_lvl_1/dir_1_lvl_2/dir_1_lvl_3/file_5.txt']",
                 "['./file_1.txt', './file_2.txt']",
                 "['./dir_1_lvl_1/dir_1_lvl_2/file_4.txt']",
-                "['./dir_1_lvl_1/file_3.txt']"
+                "['./dir_1_lvl_1/.file_3.txt']"
             }
             self.assertEqual(chunked_files, expected_chunked_files)
 
@@ -349,7 +397,7 @@ class TestChunker(unittest.TestCase):
             tree = build_directory_tree(".")
             settings = ChunkerSettings()
             settings.target_size_bytes = 15
-            chunks = break_tree_into_chunks(tree, settings)
+            chunks = divide_tree_into_chunks(tree, settings)
             total_chunked_size = sum([c.total_size_bytes for c in chunks])
             total_input_size = tree.total_size_bytes
             self.assertEqual(total_chunked_size, total_input_size)
@@ -364,10 +412,10 @@ class TestSaveChunks(unittest.TestCase):
             # Remove test_archive if it exists
             settings = ChunkerSettings()
             settings.target_size_bytes = 8000
-            chunks = break_tree_into_chunks(tree, settings)
+            chunks = divide_tree_into_chunks(tree, settings)
             for idx, chunk in enumerate(chunks):
                 compress_chunk(chunk, idx, "test_archive", "test")
-            header, complete_listing = create_full_listing(tree, "test")
+            header, complete_listing = build_full_listing(tree, "test")
             with open("test_archive/FullListing.txt", "w") as f:
                 f.write(header)
                 f.write(complete_listing)
@@ -386,13 +434,13 @@ class TestSaveChunks(unittest.TestCase):
     def test_save_chunks_error(self) -> None:
         # Test that if there is an error, the error file is created and an exception is raised
         with isolated_filesystem():
-            # Patch the check_chunk(chunk, filename) function to always raise an exception
-            with patch("archiver.archiver.check_chunk", side_effect=RuntimeError("Test error")):
+            # Patch the verify_chunk(chunk, filename) function to always raise an exception
+            with patch("archiver.archiver.verify_chunk", side_effect=RuntimeError("Test error")):
                 add_mock_files_many()
                 tree = build_directory_tree("test")
                 settings = ChunkerSettings()
                 settings.target_size_bytes = 8000
-                chunks = break_tree_into_chunks(tree, settings)
+                chunks = divide_tree_into_chunks(tree, settings)
                 with self.assertRaisesRegex(RuntimeError, "Test error"):
                     compress_chunk(chunks[0], 0, "test_archive", "test")
                 self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000000ERROR.txt"))
@@ -403,30 +451,30 @@ class TestSaveChunks(unittest.TestCase):
             tree = build_directory_tree("test")
             settings = ChunkerSettings()
             settings.target_size_bytes = 8000
-            chunks = break_tree_into_chunks(tree, settings)
+            chunks = divide_tree_into_chunks(tree, settings)
             compress_chunk(chunks[0], 0, "test_archive", "test")
             self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000000.zip"))
             self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000000Listing.txt"))
             self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000000Check.txt"))
             self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000000Hash.txt"))
 
-            check_chunk(chunks[0], "test_archive/Chunks/Chunk0000000.zip", "test")
+            verify_chunk(chunks[0], "test_archive/Chunks/Chunk0000000.zip", "test")
 
             chunks[0].directories[0].files[0].size += 1
             chunks[0].total_size_bytes += 1
 
             with self.assertRaisesRegex(RuntimeError, "Total size of files in zip file"):
-                check_chunk(chunks[0], "test_archive/Chunks/Chunk0000000.zip", "test")
+                verify_chunk(chunks[0], "test_archive/Chunks/Chunk0000000.zip", "test")
 
             chunks[0].directories[0].files[1].size -= 1
             chunks[0].total_size_bytes -= 1
 
             with self.assertRaisesRegex(RuntimeError, "File test/folder_1/file_0.txt has a different size in zip file"):
-                check_chunk(chunks[0], "test_archive/Chunks/Chunk0000000.zip", "test")
+                verify_chunk(chunks[0], "test_archive/Chunks/Chunk0000000.zip", "test")
 
             chunks[0].directories[0].files[1].size += 1
             chunks[0].directories[0].files[0].size -= 1
-            check_chunk(chunks[0], "test_archive/Chunks/Chunk0000000.zip", "test")
+            verify_chunk(chunks[0], "test_archive/Chunks/Chunk0000000.zip", "test")
 
             # Delete a file from the zip file
             file_0_contents: str = ""
@@ -439,14 +487,14 @@ class TestSaveChunks(unittest.TestCase):
                 file_0_contents = zip_file.read("test/folder_1/file_0.txt").decode("utf-8")
 
             with self.assertRaisesRegex(RuntimeError, "Number of files"):
-                check_chunk(chunks[0], "file_deleted.zip", "test")
+                verify_chunk(chunks[0], "file_deleted.zip", "test")
 
             # Add a file to the zip file
             with zipfile.ZipFile("file_deleted.zip", "a") as zip_file:
                 zip_file.writestr("test/folder_1/file_0_incorrect.txt", file_0_contents)
 
             with self.assertRaisesRegex(RuntimeError, "File test/folder_1/file_0.txt is not present"):
-                check_chunk(chunks[0], "file_deleted.zip", "test")
+                verify_chunk(chunks[0], "file_deleted.zip", "test")
 
     def test_chunk_dictionary(self) -> None:
         with isolated_filesystem():
@@ -454,8 +502,8 @@ class TestSaveChunks(unittest.TestCase):
             tree = build_directory_tree("test")
             settings = ChunkerSettings()
             settings.target_size_bytes = 8000
-            chunks = break_tree_into_chunks(tree, settings)
-            chunk_dict = create_chunk_dictionary(chunks, "test")
+            chunks = divide_tree_into_chunks(tree, settings)
+            chunk_dict = build_chunk_dictionary(chunks, "test")
             self.assertEqual(type(chunk_dict), str)
             self.assertIn("Chunk 0000000: ", chunk_dict)
             self.assertIn("Chunk 0000001: ", chunk_dict)
@@ -484,3 +532,125 @@ class TestArchiveRunner(unittest.TestCase):
         self.assertEqual(runner._chunker_settings.target_size_bytes, 1 * 1024 * 1024)
         runner.parse_arguments(["--output-dir", "test_archive", "--input-dir", "test", "--verbose"])
         self.assertEqual(runner._verbose, True)
+
+        with self.assertRaisesRegex(ValueError, "Target chunk size must be at least 1"):
+            runner.parse_arguments(
+                ["--output-dir", "test_archive", "--input-dir", "test", "--target-chunk-size-mb", "0"]
+            )
+
+    def test_archive_runner_run(self) -> None:
+        with isolated_filesystem():
+            add_mock_files_many()
+            runner = ArchiveRunner()
+            runner.parse_arguments(["--output-dir", "test_archive", "--input-dir", "test"])
+
+            with self.assertRaisesRegex(RuntimeError, "does not exist"):
+                # Output folder doesn't exist
+                runner.run()
+            os.mkdir("test_archive")
+            os.mkdir("test_archive/Chunks")
+            with self.assertRaisesRegex(RuntimeError, "is not empty"):
+                # Output folder not empty
+                runner.run()
+            os.rmdir("test_archive/Chunks")
+
+            runner.parse_arguments(["--output-dir", "test_archive", "--input-dir", "test_not_exist"])
+            with self.assertRaisesRegex(RuntimeError, "does not exist"):
+                # Input folder doesn't exist
+                runner.run()
+
+            # Create a file called "test" in the current directory
+            with open("test_not_exist", "w") as file:
+                file.write("test")
+            with self.assertRaisesRegex(RuntimeError, "is not a directory"):
+                # Input folder isn't a folder
+                runner.run()
+
+            runner.parse_arguments(["--output-dir", "test_in", "--input-dir", "test"])
+            # Create a file called "test" in the current directory
+            with open("test_in", "w") as file:
+                file.write("test")
+
+            with self.assertRaisesRegex(RuntimeError, "is not a directory"):
+                # Output folder isn't a folder
+                runner.run()
+
+            runner.parse_arguments(
+                [
+                    "--output-dir", "test_archive", "--input-dir", "test", "--verbose",
+                    "--target-chunk-size-mb", "0.1",
+                ]
+            )
+
+            runner.run()
+
+            self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000000.zip"))
+            self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000000Listing.txt"))
+            self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000000Check.txt"))
+            self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000000Hash.txt"))
+            self.assertTrue(os.path.exists("test_archive/ChunkDictionary.txt"))
+            self.assertTrue(os.path.exists("test_archive/FullListing.txt"))
+
+    def test_archive_runner_upload(self) -> None:
+        # patch boto3.Session to return a mock session
+        with isolated_filesystem():
+            add_mock_files_many()
+            runner = ArchiveRunner()
+            runner.parse_arguments(
+                [
+                    "--output-dir", "test_archive", "--input-dir", "test", "--verbose",
+                    "--target-chunk-size-mb", "0.01", "--upload"
+                ]
+            )
+            self.assertTrue(runner._upload)
+            os.mkdir("test_archive")
+
+            with self.assertRaisesRegex(RuntimeError, "ARCHIVER_S3_ACCESS_KEY"):
+                runner.run(boto_session_cls=MockBoto3Session)
+
+            os.environ["ARCHIVER_S3_ACCESS_KEY"] = "test_access_key"
+
+            with self.assertRaisesRegex(RuntimeError, "ARCHIVER_S3_SECRET_KEY"):
+                runner.run(boto_session_cls=MockBoto3Session)
+
+            os.environ["ARCHIVER_S3_SECRET_KEY"] = "test_secret_key"  # noqa
+
+            with self.assertRaisesRegex(RuntimeError, "ARCHIVER_S3_BUCKET_NAME"):
+                runner.run(boto_session_cls=MockBoto3Session)
+
+            os.environ["ARCHIVER_S3_BUCKET_NAME"] = "test_bucket"
+
+            with self.assertRaisesRegex(RuntimeError, "ARCHIVER_S3_ENDPOINT_URL"):
+                runner.run(boto_session_cls=MockBoto3Session)
+
+            os.environ["ARCHIVER_S3_ENDPOINT_URL"] = "test_endpoint_url"
+
+            # Now all the environment variables are set, so it should run
+            runner.run(boto_session_cls=MockBoto3Session)
+
+            global global_objects_added
+
+            for blob_name, file_name in global_objects_added.items():
+                self.assertTrue(blob_name.startswith("test/"))
+                self.assertTrue(os.path.exists(file_name))
+                # Get the filename of the blob_name
+                blob_filename = blob_name.split("/")[-1]
+                self.assertIn(blob_filename, file_name)
+
+            self.assertIn("test/ChunkDictionary.txt", global_objects_added)
+            self.assertIn("test/FullListing.txt", global_objects_added)
+
+            self.assertIn("test/Chunks/Chunk0000000.zip", global_objects_added)
+            self.assertIn("test/Chunks/Chunk0000000Listing.txt", global_objects_added)
+            self.assertIn("test/Chunks/Chunk0000000Check.txt", global_objects_added)
+            self.assertIn("test/Chunks/Chunk0000000Hash.txt", global_objects_added)
+
+            self.assertIn("test/Chunks/Chunk0000001.zip", global_objects_added)
+            self.assertIn("test/Chunks/Chunk0000001Listing.txt", global_objects_added)
+            self.assertIn("test/Chunks/Chunk0000001Check.txt", global_objects_added)
+            self.assertIn("test/Chunks/Chunk0000001Hash.txt", global_objects_added)
+
+            self.assertIn("test/Chunks/Chunk0000002.zip", global_objects_added)
+            self.assertIn("test/Chunks/Chunk0000002Listing.txt", global_objects_added)
+            self.assertIn("test/Chunks/Chunk0000002Check.txt", global_objects_added)
+            self.assertIn("test/Chunks/Chunk0000002Hash.txt", global_objects_added)
