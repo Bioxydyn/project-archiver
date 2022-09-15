@@ -2,37 +2,39 @@
 
 [![Coverage Status](https://coveralls.io/repos/github/Bioxydyn/project-archiver/badge.svg?branch=main)](https://coveralls.io/github/Bioxydyn/project-archiver?branch=main)
 
+To install:
+
     pip3 install git+https://github.com/Bioxydyn/project-archiver.git@main
 
-A tool to archive projects held on a file system, compressing them into chunks which can then be uploaded into the cloud. It has been designed to safely archive the data for the various TRISTAN deliverables, making it easy to transmit data collaborators or archive.
+Project Archiver is a tool to archive projects held on a file system, compressing them into chunks which can then be uploaded into the cloud. It has been designed to safely archive the data for the various TRISTAN deliverables, making it easy to transmit data collaborators or archive. It is particularly useful when you have a large (> 1TB) folder containing many files (> 1e7) which you want to archive to an S3 compatible cloud storage system.
 
-    ./archive -i /path/to/myProject -o /path/to/archive
+Example:
+
+    archiver --help
+    archiver --input-dir /path/to/myProject -output-dir /path/to/archive --verbose --upload
 
 Will do the following:
 
-1. Scan the input folder and all files in it. For each file will save the relative path, size and last modified date
-2. Save out this initial listing to `/path/to/archive/FullListing.txt`
-3. Make a decicsion to split which files into chunks
-4. Go through each of the chunks and make a zip
-    - `/path/to/archive/Chunks/00001/ChunkListing.txt`
-    - `/path/to/archive/Chunks/00001/Chunk00001.zip`
-5. Read back the zip file and check it contains all expected files and their size is as expected from the full listing
-    - `/path/to/archive/Chunks/00001/ChunkCheck.txt`
-6. Save the decision to `/path/to/archive/ChunkDictionary.txt`. This file will allow a future reader to identify which of the files in FullListing are stored in which chunks, thus allowing them to access them without downloading the full archive
-7. Create `path/to/archive/index.html`. This file can be opened with a web browser, allows the user to browse the listing of
-files (not open them) and view which chunks they are present in.
-7.  Create `/path/to/archive/CompleteSuccess.txt` or `/path/to/archive/CompleteERROR.txt`
+1. Scan the input folder and all files in it. For each file will save the relative path, size and last modified date.
+2. Save out this initial listing to `/path/to/archive/FullListing.txt`.
+3. Make a decision to split which files into which chunks. This is based on the size of the files and the size of the chunks. The default chunk size is 1GB, but this can be changed with the `--target-chunk-size-mb` option.
+4. Go through each of the chunks and make a zip file, listing and SHA256 hash for each, producing the following files:
+    - `/path/to/archive/Chunks/Chunk00001Listing.txt`
+    - `/path/to/archive/Chunks/Chunk00001.zip`
+    - `/path/to/archive/Chunks/Chunk00001Hash.txt`
+5. Read back the zip file and check it contains all expected files and their size is as expected from the full listing, producing the following file:
+    - `/path/to/archive/Chunks/Chunk00001Check.txt`
+6. Save a list of all files and to which chunk they belong to `/path/to/archive/ChunkDictionary.txt`. This file will allow a future reader to identify which of the files in the input are stored in which chunks, thus allowing them to access them without downloading the full archive.
+7.  If `--upload` is set, upload the chunks to the configured S3-compatible storage bucket. For further details see `archiver --help`.
 
-Note: 
+Notes: Project Archiver will attempt to split the files into sensible chunks based on the size of the files and the size of the chunks. It will prefer to split folders into standalone chunks, and prefer to split at a higher level in the directory tree if possible. It will try to avoid splitting files that existing within the same directory into different chunks.
 
-- Default target chunk size: 2Gb
-- Chunk strategy:
-   - Prefer to split at a top level
-   - Try to avoid splitting files that exist within the same directory
-   - Print a warning if chunks are > target * 1.5
+It will try to split the files into chunks of the target size, but will not split an individual file, therefore if you have files that are larger than the target chunk size, the target size will be exceed. It will also allow some variation in chunk size to meet the objectives described above.
+
+Example (NAS server):
 
     (venv) matthew@server-03:~$ tmux attach
     (venv) matthew@server-03:~$ sudo su
     (venv) matthew@server-03:~$ mkdir -p /mnt/TRI-16-17
-    (venv) matthew@server-03:~$ mount -t cifs -o ro,noload username=matthew.heaton //192.168.50.211/TRI-16-17 /mnt/TRI-16-17
+    (venv) matthew@server-03:~$ mount -t cifs -o ro,noload,username=matthew.heaton //192.168.50.211/TRI-16-17 /mnt/TRI-16-17
     (venv )matthew@server-03:~$ archiver --input-dir /mnt/HAM-17-01/ --output-dir /mnt/md0/HAM-17-01/ --verbose --target-chunk-size-mb 1024 --upload
