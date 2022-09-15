@@ -235,7 +235,7 @@ def build_full_listing(directory_tree: DirectoryTree, input_directory: str, line
     _recurse(directory_tree)
 
     # Get the final directoy of the path
-    directoy_name = directory_tree.absolute_path.split(os.sep)[-1]
+    directoy_name = os.path.basename(os.path.normpath(directory_tree.absolute_path))
     title = f"Directory Listing for: {directoy_name}"
     total_size_str = f"Total Size: { format_bytes(directory_tree.total_size_bytes)}"
     total_files_str = f"Total Files: {total_files:,}"
@@ -625,7 +625,7 @@ class ArchiveRunner:
                 boto_session_cls = boto3.Session
             bucket = self._get_s3_bucket(boto_session_cls)
             # Get the last folder of the input directory to use as the prefix for all S3 blobs
-            input_dir_name = self._input_directory.split("/")[-1]
+            input_dir_name = os.path.basename(os.path.normpath(self._input_directory))
             chunk_directory = self._output_directory + "/Chunks"
 
             with alive_bar(title_length=27, title="Uploading data", total=len(chunks)) as bar:

@@ -605,6 +605,11 @@ class TestArchiveRunner(unittest.TestCase):
             self.assertTrue(runner._upload)
             os.mkdir("test_archive")
 
+            os.environ.pop("ARCHIVER_S3_ACCESS_KEY", None)
+            os.environ.pop("ARCHIVER_S3_SECRET_KEY", None)
+            os.environ.pop("ARCHIVER_S3_BUCKET_NAME", None)
+            os.environ.pop("ARCHIVER_S3_ENDPOINT_URL", None)
+
             with self.assertRaisesRegex(RuntimeError, "ARCHIVER_S3_ACCESS_KEY"):
                 runner.run(boto_session_cls=MockBoto3Session)
 
@@ -654,3 +659,44 @@ class TestArchiveRunner(unittest.TestCase):
             self.assertIn("test/Chunks/Chunk0000002Listing.txt", global_objects_added)
             self.assertIn("test/Chunks/Chunk0000002Check.txt", global_objects_added)
             self.assertIn("test/Chunks/Chunk0000002Hash.txt", global_objects_added)
+
+            # With trailing / on output-dir and input-dir
+            runner.parse_arguments(
+                [
+                    "--output-dir", "test_archive/", "--input-dir", "test/", "--verbose",
+                    "--target-chunk-size-mb", "0.01", "--upload"
+                ]
+            )
+            global_objects_added = {}
+            shutil.rmtree("test_archive")
+            os.mkdir("test_archive")
+            runner.run(boto_session_cls=MockBoto3Session)
+
+            for blob_name, file_name in global_objects_added.items():
+                self.assertTrue(blob_name.startswith("test/"))
+                self.assertTrue(os.path.exists(file_name))
+                # Get the filename of the blob_name
+                blob_filename = blob_name.split("/")[-1]
+                self.assertIn(blob_filename, file_name)
+
+            # With absolute paths
+            current_dir = os.path.abspath(os.path.curdir)
+            print(current_dir)
+            runner.parse_arguments(
+                [
+                    "--output-dir", os.path.join(current_dir, "test_archive/"),
+                    "--input-dir", os.path.join(current_dir, "test/"), "--verbose",
+                    "--target-chunk-size-mb", "0.01", "--upload"
+                ]
+            )
+            global_objects_added = {}
+            shutil.rmtree("test_archive")
+            os.mkdir("test_archive")
+            runner.run(boto_session_cls=MockBoto3Session)
+
+            for blob_name, file_name in global_objects_added.items():
+                self.assertTrue(blob_name.startswith("test/"))
+                self.assertTrue(os.path.exists(file_name))
+                # Get the filename of the blob_name
+                blob_filename = blob_name.split("/")[-1]
+                self.assertIn(blob_filename, file_name)
