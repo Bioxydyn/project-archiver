@@ -2,6 +2,9 @@ from dataclasses import dataclass
 from typing import List, Optional
 import os
 import time
+import zipfile
+import subprocess  # noqa
+import copy
 
 
 def bytes_to_human_padded(n_bytes: int) -> str:
@@ -160,7 +163,7 @@ def get_all_files(directory_tree: DirectoryTree) -> List[FileMetadata]:
     """
     Get all files in a directory tree, recursively.
     """
-    files = directory_tree.files
+    files = copy.deepcopy(directory_tree.files)
     for sub_tree in directory_tree.directories:
         files += get_all_files(sub_tree)
     return files
@@ -222,8 +225,6 @@ def create_full_listing(directory_tree: DirectoryTree) -> str:
         + "Running with input directory: " + directory_tree.absolute_path + "\n\n"
     )
 
-    print(header)
-
     return header + full_listing
 
 
@@ -268,7 +269,7 @@ def break_tree_into_chunks(directory_tree: DirectoryTree, chunker_settings: Chun
                     # We need to split this directory
                     _recurse(d)
             else:
-                # When we add this directory, we don't exceed our target size. So we can either add it to
+                # When we add this directory, we don't exceed our max target size. So we can either add it to
                 # the current chunk, or create a new chunk and add it to that.
                 if current_chunk.total_size_bytes > chunker_settings.target_size_bytes:
                     current_chunk = _fresh_chunk(directory_tree)
@@ -297,7 +298,7 @@ def break_tree_into_chunks(directory_tree: DirectoryTree, chunker_settings: Chun
                     current_chunk.files.append(f)
                     current_chunk.total_size_bytes += f.size
             else:
-                # When we add this file, we don't exceed our target size. So we can either add it to
+                # When we add this file, we don't exceed our max target size. So we can either add it to
                 # the current chunk, or create a new chunk and add it to that.
                 if current_chunk.total_size_bytes > chunker_settings.target_size_bytes:
                     current_chunk = _fresh_chunk(directory_tree)
@@ -309,3 +310,119 @@ def break_tree_into_chunks(directory_tree: DirectoryTree, chunker_settings: Chun
     _recurse(directory_tree)
 
     return chunks
+
+
+def get_sha_sum(file_path: str) -> str:
+    """
+    Get the sha sum of a file
+    """
+    # Run shasum to get the checksum of the zip file
+    return "SHA256: " + subprocess.run(  # noqa
+        ["shasum", "-a", "256", file_path],
+        stdout=subprocess.PIPE
+    ).stdout.decode("utf-8")
+
+
+def compress_chunk(chunk: DirectoryTree, chunk_number: int, output_directory: str) -> None:
+    """
+    Compress a chunk into a zip file.
+    """
+    # Create the output directory if it doesn't exist
+    if not os.path.exists(output_directory):
+        os.makedirs(output_directory)
+
+    chunk_directory = output_directory + "/Chunks"
+
+    if not os.path.exists(chunk_directory):
+        os.makedirs(chunk_directory)
+
+    listing = create_full_listing(chunk)
+
+    zip_file_name = os.path.join(chunk_directory, f"Chunk{chunk_number:07d}.zip")
+    listing_file_name = os.path.join(chunk_directory, f"Chunk{chunk_number:07d}Listing.txt")
+    check_file_name = os.path.join(chunk_directory, f"Chunk{chunk_number:07d}Check.txt")
+    error_file_name = os.path.join(chunk_directory, f"Chunk{chunk_number:07d}ERROR.txt")
+    hash_file_name = os.path.join(chunk_directory, f"Chunk{chunk_number:07d}Hash.txt")
+
+    # If any of the files already exist, then halt with an error
+    if os.path.exists(zip_file_name) or os.path.exists(listing_file_name) or os.path.exists(check_file_name):
+        raise RuntimeError("One or more output files already exist - resume is not supported. Aborting.")
+
+    with open(listing_file_name, "w") as f:
+        f.write(listing)
+
+    input_files = get_all_files(chunk)
+
+    with zipfile.ZipFile(zip_file_name, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for in_file in input_files:
+            zip_file.write(in_file.absolute_path)
+
+    with open(hash_file_name, "w") as f:
+        f.write(get_sha_sum(zip_file_name))
+
+    # Create the check file. Load the zip file from disk, and read all of the files. Check that every file in the
+    # input is present, and the size of each file is correct.
+    try:
+        check_msg = check_chunk(chunk, zip_file_name)
+        with open(check_file_name, "w") as f:
+            f.write(check_msg)
+    except Exception as e:
+        with open(error_file_name, "w") as f:
+            f.write(str(e))
+        raise e
+
+
+def check_chunk(chunk: DirectoryTree, zip_file_name: str) -> str:
+    check_output: str = ""
+    all_input_files: List[FileMetadata] = get_all_files(chunk)
+
+    with zipfile.ZipFile(zip_file_name, "r") as zip_file:
+        all_files: List[zipfile.ZipInfo] = zip_file.filelist
+
+        # Check that the number of files in the zip file is the same as the number of files in the input
+        if len(all_files) != len(all_input_files):
+            raise RuntimeError(
+                f"Number of files in zip file {zip_file_name} ({len(all_files)}) does not match number of"
+                f" files in input ({len(all_input_files)})."
+            )
+
+        check_output += f"Found {len(all_files)} files in zip file.\n"
+        check_output += f"Found {len(all_input_files)} files in input chunk.\n\n"
+
+        # Check total size is the same
+        total_size = 0
+        for file_in_zip in all_files:
+            total_size += file_in_zip.file_size
+
+        if total_size != chunk.total_size_bytes:
+            size_zip_str = bytes_to_human_padded(total_size).strip()
+            size_input_str = bytes_to_human_padded(chunk.total_size_bytes).strip()
+            raise RuntimeError(
+                f"Total size of files in zip file {zip_file_name} ({size_zip_str}) does not match total size of files"
+                f" in input chunk ({size_input_str})."
+            )
+
+        check_output += f"Total size of files in zip file: {bytes_to_human_padded(total_size).strip()} ({total_size:,}"
+        check_output += " bytes).\n"
+        check_output += f"Total size of files in input chunk:  {bytes_to_human_padded(chunk.total_size_bytes).strip()}"
+        check_output += f" ({chunk.total_size_bytes:,} bytes).\n\n"
+
+        # Check that each file in the input is present in the zip file
+        input_files_dict = {f.filename: f.file_size for f in all_files}
+        for file_in_input in all_input_files:
+            if file_in_input.absolute_path not in input_files_dict:
+                raise RuntimeError(f"File {file_in_input.absolute_path} is not present in zip file {zip_file_name}.")
+
+            if file_in_input.size != input_files_dict[file_in_input.absolute_path]:
+                size_in_zip_str = bytes_to_human_padded(input_files_dict[file_in_input.absolute_path]).strip()
+                size_in_input_str = bytes_to_human_padded(file_in_input.size).strip()
+                raise RuntimeError(
+                    f"File {file_in_input.absolute_path} has a different size in zip file ({size_in_zip_str}) than in"
+                    f" the input chunk ({size_in_input_str})."
+                )
+
+        check_output += "All files in input chunk are present in zip file.\n\n"
+        check_output += "All files in zip file have the correct size.\n\n"
+        check_output += "Checks completed successfully.\n"
+
+    return check_output

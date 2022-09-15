@@ -1,10 +1,13 @@
 import unittest
+from unittest.mock import patch
 import shutil
 import os
 import tempfile
 from contextlib import contextmanager
 import datetime
 from typing import Optional, Generator
+import random
+import zipfile
 
 
 from archiver.archiver import (
@@ -21,7 +24,10 @@ from archiver.archiver import (
     ProgressPrinter,
     break_tree_into_chunks,
     get_all_directories,
-    get_all_files
+    get_all_files,
+    get_sha_sum,
+    compress_chunk,
+    check_chunk
 )
 
 
@@ -47,6 +53,36 @@ def add_mock_files() -> None:
 
     with open("dir_1_lvl_1/dir_1_lvl_2/dir_1_lvl_3/file_5.txt", "w") as f:
         f.write("test" * 30)
+
+
+def add_mock_files_many(
+    n_folders: int = 3,
+    folder_depth: int = 5,
+    max_files_per_folder: int = 6,
+    min_files_per_folder: int = 0,
+    file_size_min: int = 5,
+    file_size_max: int = 10
+) -> None:
+
+    os.mkdir("test")
+
+    # Seed the random number generator so that we get the same results every time
+    random.seed(0)
+
+    def _recurse(base_folder: str, depth: int = 0) -> None:
+        for i in range(n_folders):
+            folder_name = f"{base_folder}/folder_{i}"
+            os.mkdir(folder_name)
+            if depth < folder_depth:
+                _recurse(folder_name, depth + 1)
+
+            files_per_folder = random.randint(min_files_per_folder, max_files_per_folder)  # noqa: S311
+            for j in range(files_per_folder):
+                with open(f"{folder_name}/file_{j}.txt", "w") as f:
+                    this_file_size = random.randint(file_size_min, file_size_max)  # noqa: S311
+                    f.write("-" * this_file_size)
+
+    _recurse("test")
 
 
 @contextmanager
@@ -184,6 +220,16 @@ class TestBuildDirectoryTree(unittest.TestCase):
             files = get_all_files(tree)
             self.assertEqual(len(files), 5)
 
+    def test_get_all_files_many(self) -> None:
+        with isolated_filesystem():
+            add_mock_files_many()
+            tree = build_directory_tree(".")
+            files = get_all_files(tree)
+            file_paths = [f.absolute_path for f in files]
+
+            # Check there are no duplicates
+            self.assertEqual(len(file_paths), len(set(file_paths)))
+
     def test_get_all_dirs(self) -> None:
         with isolated_filesystem():
             add_mock_files()
@@ -197,7 +243,6 @@ class TestCreateListing(unittest.TestCase):
         with isolated_filesystem():
             add_mock_files()
             tree = build_directory_tree(".")
-            print("\n\n")
             listing = create_full_listing(tree)
             todays_date_str = datetime.datetime.now().strftime("%Y-%m-%d")
             self.assertEqual(type(listing), str)
@@ -252,6 +297,15 @@ class TestProgressPrinter(unittest.TestCase):
         self.assertAlmostEqual(progress_printer._total_added_size, 25)
 
 
+class TestShaSum(unittest.TestCase):
+    def test_sha_sum(self) -> None:
+        with isolated_filesystem():
+            add_mock_files()
+            sha_sum = get_sha_sum("file_1.txt")
+            self.assertIn("bb7208bc9b5d7c04f1236a82a0093a5e33f40423d5ba8d4266f7092c3ba43b62", sha_sum)
+            self.assertIn("SHA256: ", sha_sum)
+
+
 class TestChunker(unittest.TestCase):
     def test_one_chunk(self) -> None:
         with isolated_filesystem():
@@ -276,3 +330,116 @@ class TestChunker(unittest.TestCase):
             total_chunked_size = sum([c.total_size_bytes for c in chunks])
             total_input_size = tree.total_size_bytes
             self.assertEqual(total_chunked_size, total_input_size)
+
+            chunked_files = {str([f.absolute_path for f in get_all_files(chunk)]) for chunk in chunks}
+            expected_chunked_files = {
+                "['./dir_1_lvl_1/dir_1_lvl_2/dir_1_lvl_3/file_5.txt']",
+                "['./file_1.txt', './file_2.txt']",
+                "['./dir_1_lvl_1/dir_1_lvl_2/file_4.txt']",
+                "['./dir_1_lvl_1/file_3.txt']"
+            }
+            self.assertEqual(chunked_files, expected_chunked_files)
+
+    def test_large_number_files_folders(self) -> None:
+        with isolated_filesystem():
+            add_mock_files_many(file_size_min=2, file_size_max=50)
+            tree = build_directory_tree(".")
+            settings = ChunkerSettings()
+            settings.target_size_bytes = 15
+            chunks = break_tree_into_chunks(tree, settings)
+            total_chunked_size = sum([c.total_size_bytes for c in chunks])
+            total_input_size = tree.total_size_bytes
+            self.assertEqual(total_chunked_size, total_input_size)
+
+
+class TestSaveChunks(unittest.TestCase):
+    def test_save_chunks_smoke(self) -> None:
+        with isolated_filesystem():
+            add_mock_files_many()
+            tree = build_directory_tree("test")
+
+            # Remove test_archive if it exists
+            settings = ChunkerSettings()
+            settings.target_size_bytes = 8000
+            chunks = break_tree_into_chunks(tree, settings)
+            for idx, chunk in enumerate(chunks):
+                compress_chunk(chunk, idx, "test_archive")
+            complete_listing = create_full_listing(tree)
+            with open("test_archive/FullListing.txt", "w") as f:
+                f.write(complete_listing)
+
+            with self.assertRaisesRegex(RuntimeError, "One or more output files already exist"):
+                compress_chunk(chunks[0], 0, "test_archive")
+
+            # Check that the files are there
+            self.assertTrue(os.path.exists("test_archive/FullListing.txt"))
+            self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000001.zip"))
+            self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000001Listing.txt"))
+            self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000001Check.txt"))
+            self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000001Hash.txt"))
+            self.assertFalse(os.path.exists("test_archive/Chunks/Chunk0000001ERROR.txt"))
+
+    def test_save_chunks_error(self) -> None:
+        # Test that if there is an error, the error file is created and an exception is raised
+        with isolated_filesystem():
+            # Patch the check_chunk(chunk, filename) function to always raise an exception
+            with patch("archiver.archiver.check_chunk", side_effect=RuntimeError("Test error")):
+                add_mock_files_many()
+                tree = build_directory_tree("test")
+                settings = ChunkerSettings()
+                settings.target_size_bytes = 8000
+                chunks = break_tree_into_chunks(tree, settings)
+                with self.assertRaisesRegex(RuntimeError, "Test error"):
+                    compress_chunk(chunks[0], 0, "test_archive")
+                self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000000ERROR.txt"))
+
+    def test_verify_chunks(self) -> None:
+        with isolated_filesystem():
+            add_mock_files_many()
+            tree = build_directory_tree("test")
+            settings = ChunkerSettings()
+            settings.target_size_bytes = 8000
+            chunks = break_tree_into_chunks(tree, settings)
+            compress_chunk(chunks[0], 0, "test_archive")
+            self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000000.zip"))
+            self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000000Listing.txt"))
+            self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000000Check.txt"))
+            self.assertTrue(os.path.exists("test_archive/Chunks/Chunk0000000Hash.txt"))
+
+            check_chunk(chunks[0], "test_archive/Chunks/Chunk0000000.zip")
+
+            chunks[0].directories[0].files[0].size += 1
+            chunks[0].total_size_bytes += 1
+
+            with self.assertRaisesRegex(RuntimeError, "Total size of files in zip file"):
+                check_chunk(chunks[0], "test_archive/Chunks/Chunk0000000.zip")
+
+            chunks[0].directories[0].files[1].size -= 1
+            chunks[0].total_size_bytes -= 1
+
+            with self.assertRaisesRegex(RuntimeError, "File test/folder_1/file_0.txt has a different size in zip file"):
+                check_chunk(chunks[0], "test_archive/Chunks/Chunk0000000.zip")
+
+            chunks[0].directories[0].files[1].size += 1
+            chunks[0].directories[0].files[0].size -= 1
+            check_chunk(chunks[0], "test_archive/Chunks/Chunk0000000.zip")
+
+            # Delete a file from the zip file
+            file_0_contents: str = ""
+            with zipfile.ZipFile("test_archive/Chunks/Chunk0000000.zip", "a") as zip_file:
+                with zipfile.ZipFile("file_deleted.zip", "w") as zip_out:
+                    for item in zip_file.infolist():
+                        buffer = zip_file.read(item.filename)
+                        if item.filename != "test/folder_1/file_0.txt":
+                            zip_out.writestr(item, buffer)
+                file_0_contents = zip_file.read("test/folder_1/file_0.txt").decode("utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "Number of files"):
+                check_chunk(chunks[0], "file_deleted.zip")
+
+            # Add a file to the zip file
+            with zipfile.ZipFile("file_deleted.zip", "a") as zip_file:
+                zip_file.writestr("test/folder_1/file_0_incorrect.txt", file_0_contents)
+
+            with self.assertRaisesRegex(RuntimeError, "File test/folder_1/file_0.txt is not present"):
+                check_chunk(chunks[0], "file_deleted.zip")

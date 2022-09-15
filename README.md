@@ -1,4 +1,4 @@
-# Bioxydyn Project Archiver
+# Project Archiver
 
 [![Coverage Status](https://coveralls.io/repos/github/Bioxydyn/project-archiver/badge.svg?branch=main)](https://coveralls.io/github/Bioxydyn/project-archiver?branch=main)
 
@@ -11,13 +11,15 @@ Will do the following:
 1. Scan the input folder and all files in it. For each file will save the relative path, size and last modified date
 2. Save out this initial listing to `/path/to/archive/FullListing.txt`
 3. Make a decicsion to split which files into chunks
-4. Save the decision to `/path/to/archive/ChunkDictionary.yml`. This file will allow a future reader to identify which of the files in FullListing are stored in which chunks, thus allowing them to access them without downloading the full archive
-5. Go through each of the chunks and make a zip
+4. Go through each of the chunks and make a zip
     - `/path/to/archive/Chunks/00001/ChunkListing.txt`
     - `/path/to/archive/Chunks/00001/Chunk00001.zip`
-6. Read back the zip file and check it contains all expected files and their size is as expected from the full listing
+5. Read back the zip file and check it contains all expected files and their size is as expected from the full listing
     - `/path/to/archive/Chunks/00001/ChunkCheck.txt`
-7. Concat all `ChunkListing.txt` and compare to `FullListing.txt`, create `/path/to/archive/CompleteSuccess.txt` or `CompleteERROR.txt`
+6. Save the decision to `/path/to/archive/ChunkListing.txt`. This file will allow a future reader to identify which of the files in FullListing are stored in which chunks, thus allowing them to access them without downloading the full archive
+7. Create `path/to/archive/index.html`. This file can be opened with a web browser, allows the user to browse the listing of
+files (not open them) and view which chunks they are present in.
+7.  Create `/path/to/archive/CompleteSuccess.txt` or `/path/to/archive/CompleteERROR.txt`
 
 Note: 
 
