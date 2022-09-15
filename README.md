@@ -16,7 +16,7 @@ Will do the following:
     - `/path/to/archive/Chunks/00001/Chunk00001.zip`
 5. Read back the zip file and check it contains all expected files and their size is as expected from the full listing
     - `/path/to/archive/Chunks/00001/ChunkCheck.txt`
-6. Save the decision to `/path/to/archive/ChunkListing.txt`. This file will allow a future reader to identify which of the files in FullListing are stored in which chunks, thus allowing them to access them without downloading the full archive
+6. Save the decision to `/path/to/archive/ChunkDictionary.txt`. This file will allow a future reader to identify which of the files in FullListing are stored in which chunks, thus allowing them to access them without downloading the full archive
 7. Create `path/to/archive/index.html`. This file can be opened with a web browser, allows the user to browse the listing of
 files (not open them) and view which chunks they are present in.
 7.  Create `/path/to/archive/CompleteSuccess.txt` or `/path/to/archive/CompleteERROR.txt`
@@ -26,5 +26,5 @@ Note:
 - Default target chunk size: 2Gb
 - Chunk strategy:
    - Prefer to split at a top level
-   - Never split files that exist at the same level
+   - Try to avoid splitting files that exist within the same directory
    - Print a warning if chunks are > target * 1.5 or < target * 0.5
