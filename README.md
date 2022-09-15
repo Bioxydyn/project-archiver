@@ -6,7 +6,7 @@ To install:
 
     pip3 install git+https://github.com/Bioxydyn/project-archiver.git@main
 
-Project Archiver is a tool to archive projects held on a file system, compressing them into chunks which can then be uploaded into the cloud. It has been designed to safely archive the data for the various TRISTAN deliverables, making it easy to transmit data collaborators or archive. It is particularly useful when you have a large (> 1TB) folder containing many files (> 1e7) which you want to archive to an S3 compatible cloud storage system.
+Project Archiver is a tool to archive projects held on a file system, compressing them into chunks which can then be uploaded into the cloud. It has been designed to safely archive the data for the various TRISTAN deliverables, making it easy to transmit data collaborators or archive. It is particularly useful when you have a large (> 1TB) folder containing many (> 1e7) files which you want to archive to an S3 compatible cloud storage system.
 
 Example:
 
