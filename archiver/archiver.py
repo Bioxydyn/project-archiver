@@ -9,6 +9,8 @@ import argparse
 from .version import __version__
 from alive_progress import alive_bar  # type: ignore
 import boto3  # type: ignore
+import json
+from pkgutil import get_data
 
 
 def format_bytes(n_bytes: int) -> str:
@@ -37,18 +39,28 @@ def format_last_modified_time(last_modified: float) -> str:
     return time.strftime("%Y-%m-%d", time.localtime(last_modified))
 
 
+def format_last_modified_time_as_iso(last_modified: float) -> str:
+    """
+    Format a last modified time.
+    """
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(last_modified))
+
+
 @dataclass
 class FileMetadata:
     path: str
     absolute_path: str
     size: int
     last_modified: float
+    present_in_chunks: Optional[List[int]] = None
 
 
 @dataclass
 class DirectoryMetadata:
     path: str
     absolute_path: str
+    last_modified: float
+    present_in_chunks: Optional[List[int]] = None
 
 
 @dataclass
@@ -58,6 +70,8 @@ class DirectoryTree:
     directories: List["DirectoryTree"]
     path: str
     absolute_path: str
+    last_modified: float
+    present_in_chunks: Optional[List[int]] = None
 
 
 @dataclass
@@ -145,9 +159,12 @@ def list_all_directories(path: str) -> List[DirectoryMetadata]:
     """
     List all directories in a directory (non-recursive).
     """
+    dirs = [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))]
+    stats = [os.stat(os.path.join(path, d)) for d in dirs]
+
     return [
-        DirectoryMetadata(path=d, absolute_path=os.path.join(path, d))
-        for d in os.listdir(path) if os.path.isdir(os.path.join(path, d))
+        DirectoryMetadata(path=d, absolute_path=os.path.join(path, d), last_modified=stat.st_mtime)
+        for d, stat in zip(dirs, stats)
     ]
 
 
@@ -173,7 +190,8 @@ def build_directory_tree(path: str, progress_callback: Optional[ProgressPrinter]
         total_size_bytes=total_size,
         directories=sub_trees,
         path=path,
-        absolute_path=os.path.abspath(path)
+        absolute_path=os.path.abspath(path),
+        last_modified=os.stat(os.path.abspath(path)).st_mtime
     )
 
 
@@ -197,14 +215,14 @@ def get_all_directories(directory_tree: DirectoryTree) -> List[str]:
     return directories
 
 
-def build_archive_path(input_directory: str, file: FileMetadata) -> str:
+def build_archive_path(input_directory: str, absolute_path: str) -> str:
     """
     Build the archive path for a file. An input file /path/to/archive/file.txt will be archived as archive/file.txt.
     """
     last_folder_of_input = os.path.basename(input_directory)
 
-    assert file.absolute_path.startswith(input_directory)
-    return last_folder_of_input + file.absolute_path[len(input_directory):]
+    assert absolute_path.startswith(input_directory)
+    return last_folder_of_input + absolute_path[len(input_directory):]
 
 
 def build_full_listing(directory_tree: DirectoryTree, input_directory: str, line_prefix: str = "") -> Tuple[str, str]:
@@ -225,7 +243,7 @@ def build_full_listing(directory_tree: DirectoryTree, input_directory: str, line
         total_files += len(directory_tree.files)
         for f in directory_tree.files:
             date_str = format_last_modified_time(f.last_modified)
-            archive_path = build_archive_path(input_directory, f)
+            archive_path = build_archive_path(input_directory, f.absolute_path)
             full_listing += f"{line_prefix}{date_str} {format_bytes(f.size).ljust(10)} {archive_path}  {f.size}\n"
             if f.size > max_file_size_bytes:
                 max_file_size_bytes = f.size
@@ -257,21 +275,103 @@ def build_full_listing(directory_tree: DirectoryTree, input_directory: str, line
     return header, full_listing
 
 
+def build_react_chonky_json_listing(directory_tree: DirectoryTree, input_directory: str) -> dict:
+    """
+    Build a JSON listing of a directory tree which is in the correct format for the Chonky ReactJS file manager.
+    """
+
+    current_obj_id = 0
+    file_map = {}
+
+    def _recurse(directory_tree: DirectoryTree, parent_id: str = "") -> None:
+        nonlocal current_obj_id
+        nonlocal file_map
+
+        this_dir_id = str(current_obj_id)
+        this_dir_child_ids = []
+
+        present_in_chunks = []
+        if directory_tree.present_in_chunks is not None:
+            present_in_chunks = directory_tree.present_in_chunks
+
+        file_map[this_dir_id] = {
+            "id": this_dir_id,
+            "name": build_archive_path(input_directory, directory_tree.path),
+            "isDir": True,
+            "modDate": format_last_modified_time_as_iso(directory_tree.last_modified),
+            "childrenCount": len(directory_tree.directories),
+            "parentId": parent_id,
+            "presentInChunks": present_in_chunks
+        }
+
+        if parent_id == "":
+            file_map[this_dir_id].pop("parentId")
+
+        for f in directory_tree.files:
+            current_obj_id += 1
+            this_child_id = str(current_obj_id)
+            present_in_chunks = []
+            if f.present_in_chunks is not None:
+                present_in_chunks = f.present_in_chunks
+
+            file_map[this_child_id] = {
+                "id": this_child_id,
+                "name": build_archive_path(input_directory, f.absolute_path),
+                "isDir": False,
+                "isHidden": False,
+                "modDate": format_last_modified_time_as_iso(f.last_modified),
+                "size": f.size,
+                "parentId": this_dir_id,
+                "presentInChunks": present_in_chunks
+            }
+            this_dir_child_ids.append(this_child_id)
+
+        for d in directory_tree.directories:
+            current_obj_id += 1
+            this_child_id = str(current_obj_id)
+            _recurse(d, this_dir_id)
+            this_dir_child_ids.append(this_child_id)
+
+        file_map[this_dir_id]["childrenIds"] = this_dir_child_ids
+
+    _recurse(directory_tree)
+
+    return file_map  # noqa
+
+
 def divide_tree_into_chunks(directory_tree: DirectoryTree, chunker_settings: ChunkerSettings) -> List[DirectoryTree]:
     """
     Break a directory tree into chunks.
     """
-    def _fresh_chunk(directory_tree: DirectoryTree) -> DirectoryTree:
+    def _fresh_chunk(directory_tree: DirectoryTree, chunk_no: int) -> DirectoryTree:
         return DirectoryTree(
             files=[],
             total_size_bytes=0,
             directories=[],
             path=directory_tree.path,
-            absolute_path=directory_tree.absolute_path
+            absolute_path=directory_tree.absolute_path,
+            last_modified=directory_tree.last_modified,
+            present_in_chunks=[chunk_no]
         )
 
+    def _set_file_chunk_no(file: FileMetadata, chunk_no: int) -> None:
+        if file.present_in_chunks is None:
+            file.present_in_chunks = []
+        file.present_in_chunks.append(chunk_no)
+
+    def _set_chunk_no(directory_tree: DirectoryTree, chunk_no: int) -> None:
+        if directory_tree.present_in_chunks is None:
+            directory_tree.present_in_chunks = []
+        directory_tree.present_in_chunks.append(chunk_no)
+
+        for f in directory_tree.files:
+            _set_file_chunk_no(f, chunk_no)
+
+        for d in directory_tree.directories:
+            _set_chunk_no(d, chunk_no)
+
     chunks: List[DirectoryTree] = []
-    current_chunk = _fresh_chunk(directory_tree)
+    current_chunk = _fresh_chunk(directory_tree, 0)
     chunks.append(current_chunk)
 
     def _recurse(directory_tree: DirectoryTree) -> None:
@@ -282,7 +382,7 @@ def divide_tree_into_chunks(directory_tree: DirectoryTree, chunker_settings: Chu
             if current_chunk.total_size_bytes + d.total_size_bytes > chunker_settings.get_max_target_size_bytes():
                 if current_chunk.total_size_bytes > chunker_settings.get_min_target_size_bytes():
                     # Current chunk is finished, create a new chunk
-                    current_chunk = _fresh_chunk(directory_tree)
+                    current_chunk = _fresh_chunk(directory_tree, len(chunks))
                     chunks.append(current_chunk)
 
                     if d.total_size_bytes > chunker_settings.get_max_target_size_bytes():
@@ -290,6 +390,7 @@ def divide_tree_into_chunks(directory_tree: DirectoryTree, chunker_settings: Chu
                         _recurse(d)
                     else:
                         # We add this directory to the new chunk
+                        _set_chunk_no(d, len(chunks) - 1)
                         current_chunk.directories.append(d)
                         current_chunk.total_size_bytes += d.total_size_bytes
                 else:
@@ -301,9 +402,10 @@ def divide_tree_into_chunks(directory_tree: DirectoryTree, chunker_settings: Chu
                 # When we add this directory, we don't exceed our max target size. So we can either add it to
                 # the current chunk, or create a new chunk and add it to that.
                 if current_chunk.total_size_bytes > chunker_settings.target_size_bytes:
-                    current_chunk = _fresh_chunk(directory_tree)
+                    current_chunk = _fresh_chunk(directory_tree, len(chunks))
                     chunks.append(current_chunk)
 
+                _set_chunk_no(d, len(chunks) - 1)
                 current_chunk.directories.append(d)
                 current_chunk.total_size_bytes += d.total_size_bytes
 
@@ -311,9 +413,10 @@ def divide_tree_into_chunks(directory_tree: DirectoryTree, chunker_settings: Chu
             if current_chunk.total_size_bytes + f.size > chunker_settings.get_max_target_size_bytes():
                 if current_chunk.total_size_bytes > chunker_settings.get_min_target_size_bytes():
                     # Current chunk is finished, create a new chunk
-                    current_chunk = _fresh_chunk(directory_tree)
+                    current_chunk = _fresh_chunk(directory_tree, len(chunks))
                     chunks.append(current_chunk)
 
+                    _set_file_chunk_no(f, len(chunks) - 1)
                     current_chunk.files.append(f)
                     current_chunk.total_size_bytes += f.size
                 else:
@@ -321,18 +424,20 @@ def divide_tree_into_chunks(directory_tree: DirectoryTree, chunker_settings: Chu
                     is_file_greater_than_target = f.size > chunker_settings.target_size_bytes
 
                     if is_file_greater_than_target and not is_current_chunk_empty:
-                        current_chunk = _fresh_chunk(directory_tree)
+                        current_chunk = _fresh_chunk(directory_tree, len(chunks))
                         chunks.append(current_chunk)
 
+                    _set_file_chunk_no(f, len(chunks) - 1)
                     current_chunk.files.append(f)
                     current_chunk.total_size_bytes += f.size
             else:
                 # When we add this file, we don't exceed our max target size. So we can either add it to
                 # the current chunk, or create a new chunk and add it to that.
                 if current_chunk.total_size_bytes > chunker_settings.target_size_bytes:
-                    current_chunk = _fresh_chunk(directory_tree)
+                    current_chunk = _fresh_chunk(directory_tree, len(chunks))
                     chunks.append(current_chunk)
 
+                _set_file_chunk_no(f, len(chunks) - 1)
                 current_chunk.files.append(f)
                 current_chunk.total_size_bytes += f.size
 
@@ -386,7 +491,7 @@ def compress_chunk(chunk: DirectoryTree, chunk_number: int, output_directory: st
     with zipfile.ZipFile(zip_file_name, "w", zipfile.ZIP_DEFLATED, compresslevel=7) as zip_file:
         for in_file in input_files:
             # To form the arcname, remove the input directory from the start file path
-            zip_file.write(in_file.absolute_path, arcname=build_archive_path(input_directory, in_file))
+            zip_file.write(in_file.absolute_path, arcname=build_archive_path(input_directory, in_file.absolute_path))
 
     with open(hash_file_name, "w") as f:
         f.write(get_sha_sum(zip_file_name))
@@ -441,7 +546,7 @@ def verify_chunk(chunk: DirectoryTree, zip_file_name: str, input_directory: str)
         # Check that each file in the input is present in the zip file
         input_files_dict = {f.filename: f.file_size for f in all_files}
         for file_in_input in all_input_files:
-            arcname = build_archive_path(input_directory, file_in_input)
+            arcname = build_archive_path(input_directory, file_in_input.absolute_path)
             if arcname not in input_files_dict:
                 raise RuntimeError(f"File {arcname} is not present in zip file {zip_file_name}.")
 
@@ -471,6 +576,34 @@ def build_chunk_dictionary(chunks: List[DirectoryTree], input_directory: str) ->
         chunk_dictionary += chunk_listing
         chunk_dictionary += "\n\n\n"
     return chunk_dictionary
+
+
+def build_html_ui(directory_tree: DirectoryTree, input_directory: str) -> str:
+
+    file_listing = build_react_chonky_json_listing(directory_tree, input_directory)
+
+    html_raw = get_data("archiver.res", "index.htmlprebuild")
+    if html_raw is None:
+        raise RuntimeError("Could not find index.htmlprebuild in the resource file.")
+    main_js_raw = get_data("archiver.res", "main.jsprebuild")
+    if main_js_raw is None:
+        raise RuntimeError("Could not find main.jsprebuild in the resource file.")
+
+    assert isinstance(html_raw, bytes)
+    assert isinstance(main_js_raw, bytes)
+
+    html: str = html_raw.decode("utf-8")
+    main_js: str = main_js_raw.decode("utf-8")
+
+    html = html.replace("{{TITLE}}", "Archive: " + os.path.basename(os.path.normpath(directory_tree.path)))
+
+    substr = '{"productionFileMapWillBeSwappedByPostProcessingScript":{"productionFileMapWillBeSwappedByPostProcessingScript":"productionFileMapWillBeSwappedByPostProcessingScript"}}'  # noqa: E501
+    if substr not in main_js:
+        raise RuntimeError("Could not find substring to replace in main.jsprebuild.")
+
+    main_js = main_js.replace(substr, json.dumps(file_listing))
+
+    return html.replace("{{MAIN_JS}}", main_js)
 
 
 class ArchiveRunner:
@@ -505,6 +638,8 @@ class ArchiveRunner:
             )
         )
         parser.add_argument("--verbose", action="store_true", help="Enable verbose output.")
+        parser.add_argument("--html-only", action="store_true", help="Only output the WebInterface.html", default=False)
+
         default_chunk_size_mb = int(self._chunker_settings.target_size_bytes / 1024 / 1024)
         parser.add_argument(
             "--target-chunk-size-mb",
@@ -520,6 +655,10 @@ class ArchiveRunner:
         self._chunker_settings.target_size_bytes = int(parsed_args.target_chunk_size_mb * 1024 * 1024)
         self._verbose = parsed_args.verbose
         self._upload = parsed_args.upload
+        self._html_only = parsed_args.html_only
+
+        if self._html_only and self._upload:
+            raise RuntimeError("Cannot enable --upload and output HTML only.")
 
         if self._chunker_settings.target_size_bytes < 1:
             raise ValueError("Target chunk size must be at least 1 B.")
@@ -590,6 +729,14 @@ class ArchiveRunner:
             progress_printer.set_alive_bar(bar)
             input_tree = build_directory_tree(self._input_directory, progress_printer)
 
+        if self._html_only:
+            # Create the web interface
+            with alive_bar(title_length=27, title="Creating WebInterface.html", total=0) as bar:
+                progress_printer.set_alive_bar(bar)
+                with open(os.path.join(self._output_directory, "WebInterface.html"), "w") as f:
+                    f.write(build_html_ui(input_tree, self._input_directory))
+            return
+
         header, content = build_full_listing(input_tree, self._input_directory)
         print(f"\n{header}\n")
 
@@ -618,6 +765,18 @@ class ArchiveRunner:
             with open(os.path.join(self._output_directory, "FullListing.txt"), "w") as f:
                 f.write(header)
                 f.write(content)
+
+        # Create the web page JSON listing
+        with alive_bar(title_length=27, title="Creating WebFileListing.json", total=0) as bar:
+            progress_printer.set_alive_bar(bar)
+            with open(os.path.join(self._output_directory, "WebFileListing.json"), "w") as f:
+                json.dump(build_react_chonky_json_listing(input_tree, self._input_directory), f)
+
+        # Create the web interface
+        with alive_bar(title_length=27, title="Creating WebInterface.html", total=0) as bar:
+            progress_printer.set_alive_bar(bar)
+            with open(os.path.join(self._output_directory, "WebInterface.html"), "w") as f:
+                f.write(build_html_ui(input_tree, self._input_directory))
 
         # Upload data to S3-compatible storage
         if self._upload:
@@ -659,4 +818,12 @@ class ArchiveRunner:
             bucket.upload_file(
                 os.path.join(self._output_directory, "ChunkDictionary.txt"),
                 os.path.join(input_dir_name, "ChunkDictionary.txt")
+            )
+            bucket.upload_file(
+                os.path.join(self._output_directory, "WebFileListing.json"),
+                os.path.join(input_dir_name, "WebFileListing.json")
+            )
+            bucket.upload_file(
+                os.path.join(self._output_directory, "WebInterface.html"),
+                os.path.join(input_dir_name, "WebInterface.html")
             )

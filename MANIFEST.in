@@ -1,4 +1,6 @@
 graft archiver
+recursive-include archiver *.htmlprebuild
+recursive-include archiver *.jsprebuild
 global-exclude .DS_Store
 global-exclude __pycache__
 global-exclude *.pyc

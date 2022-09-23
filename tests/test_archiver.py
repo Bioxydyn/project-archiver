@@ -8,11 +8,13 @@ import datetime
 from typing import Optional, Generator, Dict
 import random
 import zipfile
+import json
 
 
 from archiver.archiver import (
     format_bytes,
     format_last_modified_time,
+    format_last_modified_time_as_iso,
     list_all_files,
     FileMetadata,
     list_all_directories,
@@ -29,7 +31,8 @@ from archiver.archiver import (
     compress_chunk,
     verify_chunk,
     build_chunk_dictionary,
-    ArchiveRunner
+    ArchiveRunner,
+    build_react_chonky_json_listing
 )
 
 
@@ -164,6 +167,12 @@ class TestFormatLastModified(unittest.TestCase):
         expected = "2022-09-13"
         actual = format_last_modified_time(timestamp)
         self.assertEqual(expected, actual)
+
+    def test_format_last_modified_time_as_iso(self) -> None:
+        timestamp = 1663067974.3103588
+        expected = "2022-09-13T"
+        actual = format_last_modified_time_as_iso(timestamp)
+        self.assertIn(expected, actual)
 
 
 class TestFormatBytes(unittest.TestCase):
@@ -339,7 +348,7 @@ class TestProgressPrinter(unittest.TestCase):
                 FileMetadata(path="test2", absolute_path="test2", size=15, last_modified=0.0)
             ],
             [
-                DirectoryMetadata(path="test", absolute_path="test"),
+                DirectoryMetadata(path="test", absolute_path="test", last_modified=0.0),
             ]
         )
 
@@ -700,3 +709,31 @@ class TestArchiveRunner(unittest.TestCase):
                 # Get the filename of the blob_name
                 blob_filename = blob_name.split("/")[-1]
                 self.assertIn(blob_filename, file_name)
+
+    def test_archive_runner_run_html_only(self) -> None:
+        with isolated_filesystem():
+            add_mock_files_many()
+            runner = ArchiveRunner()
+            runner.parse_arguments(["--output-dir", "test_archive", "--input-dir", "test", "--html-only"])
+            os.mkdir("test_archive")
+            runner.run()
+            self.assertTrue(os.path.exists("test_archive/WebInterface.html"))
+            self.assertFalse(os.path.exists("test_archive/FullListing.txt"))
+
+            with self.assertRaisesRegex(RuntimeError, "Cannot enable --upload and output HTML only."):
+                runner.parse_arguments(
+                    ["--output-dir", "test_archive", "--input-dir", "test", "--html-only", "--upload"]
+                )
+
+
+class TestChonkyJSONExport(unittest.TestCase):
+    def test_chonky_json_export(self) -> None:
+        with isolated_filesystem():
+            add_mock_files_many()
+            tree = build_directory_tree("test")
+            settings = ChunkerSettings()
+            settings.target_size_bytes = 80
+            _ = divide_tree_into_chunks(tree, settings)
+            export = build_react_chonky_json_listing(tree, "test")
+            stringified = json.dumps(export, indent=4)
+            self.assertTrue(len(stringified) > 0)

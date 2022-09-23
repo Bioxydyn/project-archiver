@@ -130,3 +130,5 @@ dmypy.json
 test/
 test_archive/
 .DS_Store
+
+ui/node_modules/
