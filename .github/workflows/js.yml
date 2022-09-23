@@ -1,0 +1,36 @@
+name: React.js
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+
+jobs:
+  build:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18.x]
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v1
+      with:
+        node-version: ${{ matrix.node-version }}
+    - name: Run `standard`
+      run: |
+        npm install standard --global
+        cd ui
+        standard
+    - name: Install dependencies and build
+      run: |
+        cd ui
+        node --version
+        npm --version
+        npm install --save
+        npm run build
