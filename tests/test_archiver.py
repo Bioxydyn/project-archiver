@@ -735,5 +735,31 @@ class TestChonkyJSONExport(unittest.TestCase):
             settings.target_size_bytes = 80
             _ = divide_tree_into_chunks(tree, settings)
             export = build_react_chonky_json_listing(tree, "test")
+
+            # Check it can be loaded as JSON
             stringified = json.dumps(export, indent=4)
             self.assertTrue(len(stringified) > 0)
+
+            for key, value in export.items():
+                self.assertTrue(len(key) > 0)
+                self.assertTrue(len(value) > 0)
+
+                self.assertTrue(type(value["isDir"]) is bool)
+
+                if value["isDir"]:
+                    self.assertTrue(type(value["childrenIds"]) is list)
+                    self.assertTrue(type(value["childrenCount"]) is int)
+                else:
+                    self.assertTrue(type(value["size"]) is int)
+
+                # Check for mandatory keys
+                self.assertTrue(type(value["id"]) is str)
+                self.assertTrue(type(value["name"]) is str)
+                self.assertTrue(type(value["modDate"]) is str)
+                self.assertTrue(type(value["presentInChunks"]) is list)
+
+                for chunk in value["presentInChunks"]:
+                    self.assertTrue(type(chunk) is int)
+
+                # Check the name looks correct - should not contain /
+                self.assertNotIn("/", value["name"])

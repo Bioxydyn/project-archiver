@@ -252,9 +252,9 @@ def build_full_listing(directory_tree: DirectoryTree, input_directory: str, line
 
     _recurse(directory_tree)
 
-    # Get the final directoy of the path
-    directoy_name = os.path.basename(os.path.normpath(directory_tree.absolute_path))
-    title = f"Directory Listing for: {directoy_name}"
+    # Get the final directory of the path
+    directory_name = os.path.basename(os.path.normpath(directory_tree.absolute_path))
+    title = f"Directory Listing for: {directory_name}"
     total_size_str = f"Total Size: { format_bytes(directory_tree.total_size_bytes)}"
     total_files_str = f"Total Files: {total_files:,}"
     max_file_size_str = f"Max File Size: {format_bytes(max_file_size_bytes)}"
@@ -283,6 +283,9 @@ def build_react_chonky_json_listing(directory_tree: DirectoryTree, input_directo
     current_obj_id = 0
     file_map = {}
 
+    def _build_name(path: str) -> str:
+        return os.path.basename(os.path.normpath(build_archive_path(input_directory, path)))
+
     def _recurse(directory_tree: DirectoryTree, parent_id: str = "") -> None:
         nonlocal current_obj_id
         nonlocal file_map
@@ -296,7 +299,7 @@ def build_react_chonky_json_listing(directory_tree: DirectoryTree, input_directo
 
         file_map[this_dir_id] = {
             "id": this_dir_id,
-            "name": build_archive_path(input_directory, directory_tree.path),
+            "name": _build_name(directory_tree.path),
             "isDir": True,
             "modDate": format_last_modified_time_as_iso(directory_tree.last_modified),
             "childrenCount": len(directory_tree.directories),
@@ -316,7 +319,7 @@ def build_react_chonky_json_listing(directory_tree: DirectoryTree, input_directo
 
             file_map[this_child_id] = {
                 "id": this_child_id,
-                "name": build_archive_path(input_directory, f.absolute_path),
+                "name": _build_name(f.absolute_path),
                 "isDir": False,
                 "isHidden": False,
                 "modDate": format_last_modified_time_as_iso(f.last_modified),
