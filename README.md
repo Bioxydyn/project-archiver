@@ -50,10 +50,10 @@ Notes: Project Archiver will attempt to split the files into sensible chunks bas
 
 It will try to split the files into chunks of the target size, but will not split an individual file, therefore if you have files that are larger than the target chunk size, the target size will be exceed. It will also allow some variation in chunk size to meet the objectives described above.
 
-The below screenrecording shows both the command executing and the resulting `WebInterface.html` which allows you to browse the files in the archive and see which chunk each file is stored in.
+The below screen recording shows both the command executing and the resultant `WebInterface.html` which allows you to browse the files in the archive and see which chunk each file is stored in.
 
-![demo](https://user-images.githubusercontent.com/39562020/192096471-fcd5b9a4-41c7-4be6-9ad2-7b22111921d0.gif)
- 
+![demo2](https://user-images.githubusercontent.com/39562020/192096633-2803e04b-08a5-4a74-87bd-b6469282acad.gif)
+
 Background
 ----------
 
