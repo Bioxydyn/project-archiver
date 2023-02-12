@@ -724,6 +724,19 @@ class ArchiveRunner:
         if not os.path.isdir(self._output_directory):
             raise RuntimeError(f"Output directory {self._output_directory} is not a directory.")
 
+        # Check that the output doesn't already exist in the bucket
+        if self._upload:
+            if boto_session_cls is None:
+                boto_session_cls = boto3.Session
+            bucket = self._get_s3_bucket(boto_session_cls)
+            # Get the last folder of the input directory to use as the prefix for all S3 blobs
+            input_dir_name = os.path.basename(os.path.normpath(self._input_directory))
+            filename_to_check = os.path.join(input_dir_name, "Chunks/Chunk0000000.zip")
+
+            # Does the file exist in the bucket?
+            if filename_to_check in [obj.key for obj in bucket.objects.all()]:
+                raise RuntimeError(f"File {filename_to_check} already exists in the bucket. Aborting.")
+
         if len(os.listdir(self._output_directory)) > 0:
             raise RuntimeError(f"Output directory {self._output_directory} is not empty.")
 
