@@ -288,7 +288,6 @@ def build_react_chonky_json_listing(directory_tree: DirectoryTree, input_directo
 
     def _recurse(directory_tree: DirectoryTree, parent_id: str = "") -> None:
         nonlocal current_obj_id
-        nonlocal file_map
 
         this_dir_id = str(current_obj_id)
         this_dir_child_ids = []
@@ -379,7 +378,6 @@ def divide_tree_into_chunks(directory_tree: DirectoryTree, chunker_settings: Chu
 
     def _recurse(directory_tree: DirectoryTree) -> None:
         nonlocal current_chunk
-        nonlocal chunks
 
         for d in directory_tree.directories:
             if current_chunk.total_size_bytes + d.total_size_bytes > chunker_settings.get_max_target_size_bytes():
@@ -824,7 +822,7 @@ class ArchiveRunner:
                         os.path.join(input_dir_name, f"Chunks/Chunk{chunk_number:07d}Hash.txt")
                     )
 
-                    bar(idx / len(chunks))
+                    bar(chunk_number / len(chunks))
 
             # Upload the full listing and chunk dictionary
             bucket.upload_file(

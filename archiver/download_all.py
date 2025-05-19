@@ -111,7 +111,7 @@ def parse_arguments() -> argparse.Namespace:
         epilog=epilog,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    
+
     parser.add_argument(
         '--working-dir',
         default='.',
