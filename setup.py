@@ -58,7 +58,7 @@ setup(
     zip_safe=False,
     install_requires=get_install_requires(),
     extras_require=get_extras_require(),
-    python_requires=">=3.8",
+    python_requires=">=3.9",
     entry_points={
         "console_scripts": [
             "archiver = archiver.cli:cli",
